@@ -37,11 +37,11 @@ SOURCES		:=	Source \
 				Source/LuaBindings \
 				../External/Lua \
 				../External/Vorbis \
-				../External/recastnavigation/Recast/Source/ \
-				../External/recastnavigation/Detour/Source/ \
+				../External/recast/Recast/Source/ \
+				../External/recast/Detour/Source/ \
 #DATA		:=	data
 #TEXTURES	:=	textures
-INCLUDES	:=	Source Source/Engine ../External ../External/Bullet ../External/Vorbis ../External/recastnavigation/Recast/Include ../External/recastnavigation/Detour/Include
+INCLUDES	:=	Source Source/Engine ../External ../External/Bullet ../External/Vorbis ../External/recast/Recast/Include ../External/recast/Detour/Include
 OUTPUT_DIR	:=	$(CURDIR)/Build/GCN
 BULLET_DIR	:=	$(CURDIR)/../External/Bullet
 

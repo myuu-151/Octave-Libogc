@@ -65,9 +65,9 @@ SOURCES		:=	Source \
 				Source/LuaBindings \
 				../External/Lua \
 				../External/Vorbis \
-				../External/recastnavigation/Recast/Source/ \
-				../External/recastnavigation/Detour/Source/
-INCLUDES	:=	Source Source/Engine ../External ../External/Vorbis ../External/Bullet $(VULKAN_SDK)/include ../External/recastnavigation/Recast/Include ../External/recastnavigation/Detour/Include
+				../External/recast/Recast/Source/ \
+				../External/recast/Detour/Source/
+INCLUDES	:=	Source Source/Engine ../External ../External/Vorbis ../External/Bullet $(VULKAN_SDK)/include ../External/recast/Recast/Include ../External/recast/Detour/Include
 OUTPUT_DIR	:=	$(CURDIR)/Build/Linux
 BULLET_DIR	:=	$(CURDIR)/../External/Bullet
 ASSIMP_DIR	:=	$(CURDIR)/../External/Assimp

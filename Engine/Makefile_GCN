@@ -49,7 +49,9 @@ BULLET_DIR	:=	$(CURDIR)/../External/Bullet
 # options for code generation
 #---------------------------------------------------------------------------------
 
-CFLAGS	= -g -O2 -Wall $(MACHDEP) $(INCLUDE) -DPLATFORM_GAMECUBE=1 -DPLATFORM_DOLPHIN=1 -DAPI_GX=1
+# Each function and variable in a section of its own, so a game linking with
+# --gc-sections leaves out what it never uses (PPGC).
+CFLAGS	= -g -O2 -Wall -ffunction-sections -fdata-sections $(MACHDEP) $(INCLUDE) -DPLATFORM_GAMECUBE=1 -DPLATFORM_DOLPHIN=1 -DAPI_GX=1
 CXXFLAGS	=	$(CFLAGS)
 
 LDFLAGS	=	-g $(MACHDEP) -Wl,-Map,$(notdir $@).map

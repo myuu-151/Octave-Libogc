@@ -28,6 +28,12 @@
 
 #include <string>
 #include <vector>
+
+// 1 = route engine logging to OSReport so it shows in Dolphin's log (OctLog too, where there is no
+// SD log). KEEP AT 0 for anything that runs on hardware: OSReport overwrites the RTC counter.
+#ifndef OCT_DOLPHIN_EMU_LOG
+#define OCT_DOLPHIN_EMU_LOG 0
+#endif
 #include <unordered_map>
 #include <ctype.h>
 #include <stdarg.h>
@@ -953,7 +959,9 @@ namespace
                 uint64_t tookUs = SYS_GetTimeMicroseconds() - startUs;
                 if (tookUs < 1000) tookUs = 1000;
                 if (tookUs > 100000) tookUs = 100000;
-                usleep((useconds_t)tookUs);
+                // A stash (into ARAM, for a zone's time from now) takes a QUARTER of the card: at
+                // half it held a sky's streamed diamond frames to a low frame rate while it read.
+                usleep((useconds_t)(read.mDst == nullptr ? tookUs * 3 : tookUs));
             }
             *read.mState = ok ? 2 : 3;
         }
@@ -1130,6 +1138,10 @@ void OctLog(const char* format, ...)
     }
 #endif
 
+#if OCT_DOLPHIN_EMU_LOG
+    SYS_Report("%s\n", buffer);          // a Dolphin test build: its log window
+    return;
+#endif
     SCOPED_LOCK(GetIsoMutex());
     IsoLog("%s", buffer);
 }
@@ -1994,9 +2006,6 @@ std::string SYS_GetClipboardText()
 // Misc
 // 1 = route engine logging to OSReport so it shows in Dolphin's log. KEEP AT 0 for anything
 // that runs on hardware: OSReport overwrites the RTC counter (see SYS_Log below).
-#ifndef OCT_DOLPHIN_EMU_LOG
-#define OCT_DOLPHIN_EMU_LOG 0
-#endif
 
 void SYS_Log(LogSeverity severity, const char* format, va_list arg)
 {

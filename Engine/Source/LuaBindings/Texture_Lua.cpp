@@ -88,6 +88,14 @@ int Texture_Lua::IsStashing(lua_State* L)
     return 1;
 }
 
+int Texture_Lua::FreeStash(lua_State* L)
+{
+    Texture* texture = CHECK_TEXTURE(L, 1);
+
+    texture->FreeStash();
+    return 0;
+}
+
 int Texture_Lua::ReloadFromStash(lua_State* L)
 {
     Texture* texture = CHECK_TEXTURE(L, 1);
@@ -199,6 +207,7 @@ void Texture_Lua::Bind()
     REGISTER_TABLE_FUNC(L, mtIndex, IsStashed);
     REGISTER_TABLE_FUNC(L, mtIndex, IsStashing);
     REGISTER_TABLE_FUNC(L, mtIndex, ReloadFromStash);
+    REGISTER_TABLE_FUNC(L, mtIndex, FreeStash);
 
     REGISTER_TABLE_FUNC(L, mtIndex, GetWidth);
 

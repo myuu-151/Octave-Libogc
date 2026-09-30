@@ -621,6 +621,20 @@ bool Texture::IsStashed(const std::string& assetName) const
     return mStashState == 2 && mStashSource == assetName;
 }
 
+void Texture::FreeStash()
+{
+#if API_GX && !EDITOR && PLATFORM_GAMECUBE
+    while (mStashState == 1)
+    {
+        SYS_Sleep(1);
+    }
+    AUD_FreeAram(mStashAram);
+    mStashAram = 0;
+    mStashState = 0;
+    mStashSource.clear();
+#endif
+}
+
 bool Texture::IsStashing() const
 {
     return mStashState == 1;

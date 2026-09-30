@@ -44,6 +44,7 @@ public:
     // fit this texture (ctx): for the background reader (see the .cpp).
     static bool LocateTexels(const char* head, uint32_t headSize, void* ctx, uint32_t& offset, uint32_t& size);
     bool ReloadFromStash();
+    void FreeStash();                   // its ARAM given back (waits for a read under way)
 
     // Asset Interface
     virtual void LoadStream(Stream& stream, Platform platform) override;

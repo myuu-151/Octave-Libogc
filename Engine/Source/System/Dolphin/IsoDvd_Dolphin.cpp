@@ -111,16 +111,32 @@ bool OctDvdReadAligned(uint32_t alignedOff, void* dst, uint32_t alignedLen)
 }
 
 // Any-alignment read: bounce through an aligned scratch buffer (used for the small
-// boot.bin/FST reads and misaligned asset offsets).
+// boot.bin/FST reads and misaligned asset offsets), a piece at a time. A scratch
+// buffer the size of the whole read needed that much again in one piece: late in a
+// long session a 499 KB file failed to load with 680 KB in one piece (the game's
+// own 499 KB already taken), and the game retried it forever.
 bool OctDvdRead(uint32_t offset, void* buf, uint32_t len)
 {
-    uint32_t alignedOff = offset & ~31u;
-    uint32_t head       = offset - alignedOff;
-    uint32_t alignedLen = (head + len + 31u) & ~31u;
-    uint8_t* tmp = (uint8_t*)memalign(32, alignedLen);
+    const uint32_t kPiece = 64 * 1024;
+    uint32_t head    = offset & 31u;
+    uint32_t scratch = (head + len + 31u) & ~31u;
+    if (scratch > kPiece) scratch = kPiece;
+    uint8_t* tmp = (uint8_t*)memalign(32, scratch);
     if (tmp == nullptr) return false;
-    bool ok = DiReadSectors(alignedOff, tmp, alignedLen);
-    if (ok) memcpy(buf, tmp + head, len);
+    uint8_t* out = (uint8_t*)buf;
+    bool ok = true;
+    while (ok && len > 0)
+    {
+        uint32_t alignedOff = offset & ~31u;
+        head = offset - alignedOff;
+        uint32_t n = scratch - head;         // this piece's bytes
+        if (n > len) n = len;
+        ok = DiReadSectors(alignedOff, tmp, (head + n + 31u) & ~31u);
+        if (ok) memcpy(out, tmp + head, n);
+        out += n;
+        offset += n;
+        len -= n;
+    }
     free(tmp);
     return ok;
 }

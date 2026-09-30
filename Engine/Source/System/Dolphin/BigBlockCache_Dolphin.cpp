@@ -14,8 +14,10 @@
 // same blocks, and the small allocations never get into them.
 //
 // NOTHING STARVES. Whenever any allocation fails, big or small, the cache gives its blocks back
-// to the heap one at a time (the biggest first) and the allocation is tried again after each.
-// The cache can only ever hold memory nothing else could get at that moment.
+// to the heap one at a time and the allocation is tried again after each: first the smallest
+// block big enough for it alone, else the biggest (see GiveBackOne). The cache can only ever hold
+// memory nothing else could get at that moment -- except PINNED sizes (System.PinBlocks), which a
+// game asks to keep for good.
 //
 // HOW. The link wraps malloc, free, realloc, calloc and memalign (Standalone/Makefile_GCN:
 // -Wl,--wrap=...): every call in the game, the engine, Lua and libstdc++ (operator new) comes
@@ -42,6 +44,7 @@ void __malloc_lock(struct _reent* r);
 void __malloc_unlock(struct _reent* r);
 }
 
+
 namespace
 {
     const size_t BIG_BLOCK = 32 * 1024;     // blocks this size and up are kept
@@ -56,16 +59,33 @@ namespace
     Kept sKept[MAX_KEPT];
     uint32_t sNumKept = 0;
 
-    // PINNED: blocks of one size a game streams all the time (a sky's frames) are never given back
-    // to the heap, so the next of them always finds one here -- given back, the heap's small
-    // allocations cut them up, and with megabytes free not one 64 KB block was left for a frame.
-    size_t sPinLo = 0;
-    size_t sPinHi = 0;
-    const uint32_t PIN_MAX = 8;             // at most this many pinned kept at once: the rest go back
-
-    bool IsPinned(size_t size)
+    // PINNED: blocks of a size a game needs again and again (a sky's frames, a stage's biggest
+    // meshes) are never given back to the heap, so the next of them always finds one here -- given
+    // back, the heap's small allocations cut them up: with megabytes free not one 64 KB block was
+    // left for a sky frame, nor one of 156 KB for a stage's rise piece, whose last one had gone
+    // back for the next stage's script and sky. Each pinned size keeps up to its own count; the
+    // rest of that size go back like any other.
+    struct Pin
     {
-        return sPinLo != 0 && size >= sPinLo && size <= sPinHi;
+        size_t mLo;
+        size_t mHi;                         // a block's usable size: the size asked for, a little over
+        uint32_t mMax;                      // at most this many kept at once
+    };
+    const uint32_t MAX_PINS = 8;
+    Pin sPins[MAX_PINS];
+    uint32_t sNumPins = 0;
+
+    // The pin a block of `size` bytes comes under, or -1.
+    int32_t PinOf(size_t size)
+    {
+        for (uint32_t i = 0; i < sNumPins; ++i)
+        {
+            if (size >= sPins[i].mLo && size <= sPins[i].mHi)
+            {
+                return int32_t(i);
+            }
+        }
+        return -1;
     }
 
     struct Lock
@@ -75,7 +95,10 @@ namespace
     };
 
     // A kept block for a request of `size` aligned to `align` (1 for plain malloc): the
-    // smallest that fits and wastes no more than an eighth. nullptr if there is none.
+    // smallest that fits and wastes no more than an eighth. A pinned block goes only to its own
+    // size: handed to anything within an eighth of it, the corners' reserved blocks went to other
+    // allocations of 70-79 KB, and the corners then looked for theirs in the heap after all.
+    // nullptr if there is none.
     void* Take(size_t size, size_t align)
     {
         if (size < BIG_BLOCK)
@@ -84,10 +107,16 @@ namespace
         }
 
         Lock lock;
+        const int32_t sizePin = PinOf(size);
         int32_t best = -1;
         for (uint32_t i = 0; i < sNumKept; ++i)
         {
             const Kept& k = sKept[i];
+            const int32_t pin = PinOf(k.mSize);
+            if (pin >= 0 && pin != sizePin)
+            {
+                continue;
+            }
             if (k.mSize >= size && k.mSize <= size + size / 8 &&
                 ((uintptr_t)k.mPtr & (align - 1)) == 0 &&
                 (best < 0 || k.mSize < sKept[best].mSize))
@@ -106,39 +135,49 @@ namespace
         return ptr;
     }
 
-    // Give the biggest kept block back to the heap. False when there is none left.
-    bool GiveBackOne()
+    // Give a kept block back to the heap, for an allocation of `forSize` bytes that failed: the
+    // smallest that is big enough for it alone, or, when none is, the biggest (the likeliest to
+    // join free space beside it into a piece that is). Always the biggest, as this was, a 2 KB
+    // allocation took a 156 KB block, and the small ones after it cut the rest up. Pinned blocks
+    // stay, up to their pin's count. False when none may go.
+    bool GiveBackOne(size_t forSize)
     {
         void* ptr = nullptr;
         {
             Lock lock;
-            if (sNumKept == 0)
-            {
-                return false;
-            }
-
-            uint32_t pinned = 0;
+            uint32_t pinned[MAX_PINS] = {};
             for (uint32_t i = 0; i < sNumKept; ++i)
             {
-                if (IsPinned(sKept[i].mSize)) pinned++;
+                const int32_t pin = PinOf(sKept[i].mSize);
+                if (pin >= 0) pinned[pin]++;
             }
-            // the biggest block that may go: any unpinned one, or a pinned one past PIN_MAX
+            int32_t fit = -1;
             int32_t biggest = -1;
             for (uint32_t i = 0; i < sNumKept; ++i)
             {
-                bool may = !IsPinned(sKept[i].mSize) || pinned > PIN_MAX;
-                if (may && (biggest < 0 || sKept[i].mSize > sKept[biggest].mSize))
+                const size_t size = sKept[i].mSize;
+                const int32_t pin = PinOf(size);
+                if (pin >= 0 && pinned[pin] <= sPins[pin].mMax)
+                {
+                    continue;               // pinned, and within its count: it stays
+                }
+                if (size >= forSize && (fit < 0 || size < sKept[fit].mSize))
+                {
+                    fit = int32_t(i);
+                }
+                if (biggest < 0 || size > sKept[biggest].mSize)
                 {
                     biggest = int32_t(i);
                 }
             }
-            if (biggest < 0)
+            const int32_t which = (fit >= 0) ? fit : biggest;
+            if (which < 0)
             {
-                return false;               // only pinned blocks left: they stay
+                return false;               // nothing, or only pinned blocks: they stay
             }
 
-            ptr = sKept[biggest].mPtr;
-            sKept[biggest] = sKept[--sNumKept];
+            ptr = sKept[which].mPtr;
+            sKept[which] = sKept[--sNumKept];
         }
 
         __real_free(ptr);
@@ -146,12 +185,57 @@ namespace
     }
 }
 
-// Blocks of `size` bytes (to an eighth over) are kept for good once freed: see IsPinned. 0 stops.
-void BigBlockCachePin(size_t size)
+// Blocks of `size` bytes, up to `count` of them, are kept for good once freed (see Pin). Each call
+// pins one more size (the same size again changes its count), up to MAX_PINS; 0 unpins them all.
+void BigBlockCachePin(size_t size, uint32_t count)
 {
     Lock lock;
-    sPinLo = size;
-    sPinHi = size + size / 8;
+    if (size == 0)
+    {
+        sNumPins = 0;
+        return;
+    }
+    for (uint32_t i = 0; i < sNumPins; ++i)
+    {
+        if (sPins[i].mLo == size)
+        {
+            sPins[i].mMax = count;
+            return;
+        }
+    }
+    if (sNumPins < MAX_PINS)
+    {
+        // a block's usable size: what was asked for and malloc's rounding, or memalign's
+        sPins[sNumPins++] = { size, size + 256, count };
+    }
+}
+
+// Pins `size` for `count` blocks, and puts that many in the cache now, from the heap as it is (at
+// boot, in one piece): the first of them is then as sure to be there as the rest. Pinned only, a
+// size still had to find its first block in the heap, and a stage's first rise piece, three stages
+// into a session, found none. 32-byte aligned, so memalign(32, ...) can have them too.
+void BigBlockCacheReserve(size_t size, uint32_t count)
+{
+    BigBlockCachePin(size, count);
+    for (uint32_t i = 0; i < count; ++i)
+    {
+        {
+            Lock lock;
+            if (sNumKept >= MAX_KEPT)
+            {
+                return;
+            }
+        }
+        void* ptr = __real_memalign(32, size);
+        if (ptr == nullptr)
+        {
+            return;
+        }
+        Lock lock;
+        sKept[sNumKept].mPtr = ptr;
+        sKept[sNumKept].mSize = malloc_usable_size(ptr);
+        sNumKept++;
+    }
 }
 
 // What the cache holds: free memory as far as the game is concerned (System.GetFreeMemory).
@@ -179,7 +263,7 @@ void* __wrap_malloc(size_t size)
     }
 
     ptr = __real_malloc(size);
-    while (ptr == nullptr && GiveBackOne())
+    while (ptr == nullptr && GiveBackOne(size))
     {
         ptr = __real_malloc(size);
     }
@@ -199,7 +283,7 @@ void* __wrap_memalign(size_t align, size_t size)
     }
 
     void* ptr = __real_memalign(align, size);
-    while (ptr == nullptr && GiveBackOne())
+    while (ptr == nullptr && GiveBackOne(size))
     {
         ptr = __real_memalign(align, size);
     }
@@ -245,7 +329,7 @@ void* __wrap_realloc(void* ptr, size_t size)
             return kept;
         }
     }
-    while (out == nullptr && size > 0 && GiveBackOne())
+    while (out == nullptr && size > 0 && GiveBackOne(size))
     {
         out = __real_realloc(ptr, size);
     }
@@ -256,7 +340,7 @@ void* __wrap_realloc(void* ptr, size_t size)
 void* __wrap_calloc(size_t count, size_t size)
 {
     void* ptr = __real_calloc(count, size);
-    while (ptr == nullptr && count > 0 && size > 0 && GiveBackOne())
+    while (ptr == nullptr && count > 0 && size > 0 && GiveBackOne(count * size))
     {
         ptr = __real_calloc(count, size);
     }

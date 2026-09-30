@@ -1414,6 +1414,8 @@ void Renderer::Render(World* world, int32_t screenIndex)
         static std::vector<NodePtrWeak> sTickNodes;
         sTickNodes.clear();
 
+        FlushConsoleMessages();         // lines logged since the last frame, from any thread (Log.cpp)
+
         if (mStatsWidget != nullptr && mStatsWidget->IsVisible()) { mStatsWidget->PrepareTick(sTickNodes, inGame, true); }
         if (mConsoleWidget != nullptr && mConsoleWidget->IsVisible()) { mConsoleWidget->PrepareTick(sTickNodes, inGame, true); }
         if (mLoadingScreenWidget != nullptr && mLoadingScreenWidget->IsVisible()) { mLoadingScreenWidget->PrepareTick(sTickNodes, inGame, true); }

@@ -20,6 +20,12 @@ struct Texture_Lua
     static int IsRenderTarget(lua_State* L);
     static int ReloadFrom(lua_State* L);
     static int ReloadPart(lua_State* L);
+    static int ReloadFromAsync(lua_State* L);
+    static int IsReloading(lua_State* L);
+    static int StashFrom(lua_State* L);
+    static int IsStashed(lua_State* L);
+    static int IsStashing(lua_State* L);
+    static int ReloadFromStash(lua_State* L);
     static int GetWidth(lua_State* L);
     static int GetHeight(lua_State* L);
     static int GetMipLevels(lua_State* L);

@@ -904,13 +904,28 @@ Asset* AssetManager::LoadAsset(AssetStub& stub)
     {
         stub.mAsset = Asset::CreateInstance(stub.mType);
 
-        if (stub.mEmbeddedData != nullptr)
+        // An allocation that fails part way through a load THROWS (operator new, a mesh's arrays),
+        // and nothing between here and the script that asked for the asset catches it: on the
+        // GameCube a stage that asked again for a piece the background loader had failed to fit
+        // went down with it. As on the loader thread (LoadThreadFunc), it is a failed load: the
+        // asset stays unloaded, and the caller gets null.
+        try
         {
-            stub.mAsset->LoadEmbedded(stub.mEmbeddedData);
+            if (stub.mEmbeddedData != nullptr)
+            {
+                stub.mAsset->LoadEmbedded(stub.mEmbeddedData);
+            }
+            else
+            {
+                stub.mAsset->LoadFile(stub.mPath.c_str());
+            }
         }
-        else
+        catch (...)
         {
-            stub.mAsset->LoadFile(stub.mPath.c_str());
+            LogError("Load of '%s' ran out of memory; left unloaded.", stub.mPath.c_str());
+            delete stub.mAsset;
+            stub.mAsset = nullptr;
+            return nullptr;
         }
 
         // Ensure stub has UUID after loading (for migration of legacy assets)

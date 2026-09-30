@@ -32,6 +32,24 @@
 #include <Windows.h>
 #endif
 
+#if PLATFORM_DOLPHIN
+#include <malloc.h>     // mallinfo, for OctLuaAlloc
+#include <new>
+void OctLog(const char* format, ...);
+
+// operator new with no memory left: logged, with where it was asked from (the addresses, for
+// powerpc-eabi-addr2line), before it ends the program as it always has -- which on a console was
+// a freeze that said nothing, and in Dolphin the emulation stopping.
+static void OctNewFailed()
+{
+    const struct mallinfo info = mallinfo();
+    OctLog("C++ ALLOC FAILED: operator new with %u KB free in %u holes, from %p %p %p",
+           unsigned(info.fordblks / 1024), unsigned(info.ordblks), __builtin_return_address(1),
+           __builtin_return_address(2), __builtin_return_address(3));
+    std::set_new_handler(nullptr);
+}
+#endif
+
 #define OCT_LUA_DEBUGGING (PLATFORM_WINDOWS)
 
 #if OCT_LUA_DEBUGGING
@@ -280,6 +298,41 @@ void ReadCommandLineArgs(int32_t argc, char** argv)
 }
 
 #if LUA_ENABLED && PLATFORM_DOLPHIN
+// Lua's allocator, as luaL_newstate's, but a request the heap cannot meet is logged: its size, what
+// the heap had free, and the Lua lines that asked. Lua then collects everything and asks again, and
+// only a second failure becomes the script's "not enough memory" -- which names no line at all, so
+// without this a console's out-of-memory said nothing of what ran it out. (A big request failing
+// with plenty free is a heap in pieces: no one hole is that big.) Integers only in the log: newlib
+// formats a float with malloc.
+static void* OctLuaAlloc(void* ud, void* ptr, size_t osize, size_t nsize)
+{
+    (void)ud;
+    if (nsize == 0)
+    {
+        free(ptr);
+        return nullptr;
+    }
+    void* p = realloc(ptr, nsize);
+    if (p == nullptr)
+    {
+        const struct mallinfo info = mallinfo();
+        char where[192] = "";
+        int at = 0;
+        lua_State* L = sEngineState.mLua;
+        lua_Debug ar;
+        for (int level = 0; L != nullptr && level < 3 && lua_getstack(L, level, &ar); ++level)
+        {
+            if (lua_getinfo(L, "Sl", &ar) && at < int(sizeof(where)) - 1)
+            {
+                at += snprintf(where + at, sizeof(where) - at, " %s:%d", ar.short_src, ar.currentline);
+            }
+        }
+        OctLog("LUA ALLOC FAILED: %u bytes (from %u) with %u KB free in %u holes, at%s", unsigned(nsize),
+               unsigned(ptr ? osize : 0), unsigned(info.fordblks / 1024), unsigned(info.ordblks), where);
+    }
+    return p;
+}
+
 // On the GameCube/Wii there is no RTC hook for the C library time(), so it returns -1
 // and Lua's stock os.time() raises "time result cannot be represented", aborting any
 // script that calls it (e.g. math.randomseed(os.time()) in a component's Start()).
@@ -457,7 +510,19 @@ bool Initialize()
         extern void BindLuaInterface();
         extern void SetupLuaPath();
 
+#if PLATFORM_DOLPHIN
+        std::set_new_handler(OctNewFailed);
+        sEngineState.mLua = lua_newstate(OctLuaAlloc, nullptr);
+        if (sEngineState.mLua != nullptr)
+        {
+            lua_atpanic(sEngineState.mLua, [](lua_State* L) -> int {
+                LogError("Lua panic: %s", lua_tostring(L, -1));
+                return 0;
+            });
+        }
+#else
         sEngineState.mLua = luaL_newstate();
+#endif
         luaL_openlibs(sEngineState.mLua);
 
 #if PLATFORM_DOLPHIN

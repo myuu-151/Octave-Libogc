@@ -487,6 +487,200 @@ TextureResource* Texture::GetResource()
 // with megabytes free, no single 512 KB block is left and the frames fail to load. The textures
 // themselves are interchangeable -- same size, same format -- so here the new texels go into the
 // buffer that is already there. The asset keeps its own name; only its picture changes.
+#if API_GX && !EDITOR
+bool SYS_ReadFileRangeInBackground(const std::string& path, uint32_t offset, uint32_t size, char* dst,
+                                   volatile int32_t* state);     // System_Dolphin.cpp
+#endif
+
+// Where a texture file's texels are, from its first bytes -- if they would fit this texture: the
+// same size, mips and format. Only reads (the texture's fixed properties and the bytes given), so
+// the background reader can call it (SYS_ReadLocatedInBackground) and the main thread never reads
+// a header off the card: waiting there behind the background reads was a 70-160 ms stutter.
+bool Texture::LocateTexels(const char* head, uint32_t headSize, void* ctx, uint32_t& offset, uint32_t& size)
+{
+#if API_GX
+    Texture* texture = (Texture*)ctx;
+    Stream stream(head, headSize);
+    AssetHeader header = Asset::ReadHeader(stream);
+    if (header.mType != texture->GetType())
+    {
+        return false;
+    }
+    stream.SetAssetVersion(header.mVersion);
+    std::string name;
+    stream.ReadString(name);
+
+    uint32_t width = stream.ReadUint32();
+    uint32_t height = stream.ReadUint32();
+    uint32_t mips = stream.ReadUint32();
+    stream.ReadUint32();                                // layers
+    PixelFormat format = (PixelFormat)stream.ReadUint32();
+    stream.ReadUint32();                                // filter
+    stream.ReadUint32();                                // wrap
+    stream.ReadBool();                                  // mipmapped
+    stream.ReadBool();                                  // render target
+    stream.ReadBool();                                  // sRGB
+    if (header.mVersion >= ASSET_VERSION_TEXTURE_LOW_QUALITY)
+    {
+        stream.ReadBool();
+        stream.ReadUint8();
+    }
+    if (header.mVersion >= ASSET_VERSION_TEXTURE_COOKED_PROPERTIES)
+    {
+        width = stream.ReadUint32();
+        height = stream.ReadUint32();
+        mips = stream.ReadUint32();
+        stream.ReadUint32();                            // filter
+    }
+    size = stream.ReadUint32();
+    offset = stream.GetPos();
+    return width == texture->mWidth && height == texture->mHeight && mips == texture->mMipLevels &&
+           format == texture->mFormat && size == texture->mResource.mTplSize && offset < headSize;
+#else
+    (void)head; (void)headSize; (void)ctx; (void)offset; (void)size;
+    return false;
+#endif
+}
+
+#if API_GX && !EDITOR
+typedef bool (*SysReadLocator)(const char* head, uint32_t headSize, void* ctx, uint32_t& offset, uint32_t& size);
+bool SYS_ReadLocatedInBackground(const std::string& path, SysReadLocator locate, void* ctx, char* dst, uint32_t aram,
+                                 volatile int32_t* state);  // System_Dolphin.cpp
+#endif
+
+bool Texture::ReloadFromAsync(const std::string& assetName)
+{
+#if API_GX && !EDITOR
+    FinishAsyncReload();
+    AssetStub* stub = AssetManager::Get()->GetAssetStub(assetName);
+    TextureResource* resource = GetResource();
+    if (!IsLoaded() || IsDynamic() || resource->mTplData == nullptr || stub == nullptr || stub->mPath.empty())
+    {
+        return false;
+    }
+    // The GPU may be drawing from these texels this frame: let it finish before the thread writes.
+    GxWaitGpu();
+    mReloadSource = assetName;
+    if (!SYS_ReadLocatedInBackground(stub->mPath, &Texture::LocateTexels, this, (char*)resource->mTplData, 0,
+                                     &mAsyncReload))
+    {
+        mReloadSource.clear();
+        return false;
+    }
+    return true;
+#else
+    (void)assetName;
+    return false;
+#endif
+}
+
+#if API_GX && !EDITOR && PLATFORM_GAMECUBE
+uint32_t AUD_AllocAram(uint32_t len);                                // Audio_Dolphin.cpp
+void AUD_FreeAram(uint32_t aramAddress);
+void AUD_AramDma(bool toAram, void* mem, uint32_t aram, uint32_t len);
+#endif
+
+bool Texture::StashFrom(const std::string& assetName)
+{
+#if API_GX && !EDITOR && PLATFORM_GAMECUBE
+    if (mStashState == 1 || mAsyncReload == 1)
+    {
+        return false;
+    }
+    // Nothing read here: the reader thread reads the file's header and finds the texels itself.
+    AssetStub* stub = AssetManager::Get()->GetAssetStub(assetName);
+    const uint32_t total = GetResource()->mTplSize;
+    if (!IsLoaded() || stub == nullptr || stub->mPath.empty() || total == 0)
+    {
+        return false;
+    }
+    if (mStashAram == 0)
+    {
+        mStashAram = AUD_AllocAram(total);
+        if (mStashAram == 0)
+        {
+            LogWarning("Texture %s: no ARAM for a stash of %u bytes", GetName().c_str(), total);
+            return false;
+        }
+    }
+    mStashSource = assetName;
+    if (!SYS_ReadLocatedInBackground(stub->mPath, &Texture::LocateTexels, this, nullptr, mStashAram, &mStashState))
+    {
+        mStashSource.clear();
+        return false;
+    }
+    return true;
+#else
+    (void)assetName;
+    return false;
+#endif
+}
+
+bool Texture::IsStashed(const std::string& assetName) const
+{
+    return mStashState == 2 && mStashSource == assetName;
+}
+
+bool Texture::IsStashing() const
+{
+    return mStashState == 1;
+}
+
+bool Texture::ReloadFromStash()
+{
+#if API_GX && !EDITOR && PLATFORM_GAMECUBE
+    if (mStashState != 2 || mStashAram == 0)
+    {
+        return false;
+    }
+    FinishAsyncReload();
+    TextureResource* resource = GetResource();
+    GxWaitGpu();                        // not while the GPU may be drawing from these texels
+    AUD_AramDma(false, resource->mTplData, mStashAram, resource->mTplSize);   // (it invalidates the cache)
+    GX_InvalidateTexAll();
+    return true;
+#else
+    return false;
+#endif
+}
+
+bool Texture::IsReloading()
+{
+#if API_GX && !EDITOR
+    if (mAsyncReload == 1)
+    {
+        return true;
+    }
+    if (mAsyncReload != 0)
+    {
+        if (mAsyncReload == 3)
+        {
+            LogError("Texture %s: reading %s failed part way; the picture is mixed", GetName().c_str(),
+                     mReloadSource.c_str());
+        }
+        // the thread wrote the texels through the cache: out to memory for the GPU, and any of
+        // the old picture's texels still in the texture cache dropped
+        TextureResource* resource = GetResource();
+        DCFlushRange(resource->mTplData, resource->mTplSize);
+        GX_InvalidateTexAll();
+        mReloadSource.clear();
+        mAsyncReload = 0;
+    }
+#endif
+    return false;
+}
+
+void Texture::FinishAsyncReload()
+{
+#if API_GX && !EDITOR
+    while (mAsyncReload == 1)
+    {
+        SYS_Sleep(1);
+    }
+    IsReloading();
+#endif
+}
+
 bool Texture::ReloadFrom(const std::string& assetName)
 {
     // All of it at once: straight into the buffer, 32 KB at a time.
@@ -507,6 +701,7 @@ int32_t Texture::ReloadPart(const std::string& assetName, uint32_t at, uint32_t 
 {
     outTotal = 0;
 #if API_GX && !EDITOR
+    FinishAsyncReload();                // (a background refill of this buffer goes first)
     TextureResource* resource = GetResource();
     AssetStub* stub = AssetManager::Get()->GetAssetStub(assetName);
     if (!IsLoaded() || IsDynamic() || resource->mTplData == nullptr || stub == nullptr || stub->mPath.empty())
@@ -523,43 +718,9 @@ int32_t Texture::ReloadPart(const std::string& assetName, uint32_t at, uint32_t 
             return -1;
         }
 
-        Stream stream(head, sizeof(head));
-        AssetHeader header = Asset::ReadHeader(stream);
-        if (header.mType != GetType())
-        {
-            return -1;
-        }
-        stream.SetAssetVersion(header.mVersion);
-        std::string name;
-        stream.ReadString(name);
-
-        uint32_t width = stream.ReadUint32();
-        uint32_t height = stream.ReadUint32();
-        uint32_t mips = stream.ReadUint32();
-        stream.ReadUint32();                                // layers
-        PixelFormat format = (PixelFormat)stream.ReadUint32();
-        stream.ReadUint32();                                // filter
-        stream.ReadUint32();                                // wrap
-        stream.ReadBool();                                  // mipmapped
-        stream.ReadBool();                                  // render target
-        stream.ReadBool();                                  // sRGB
-        if (header.mVersion >= ASSET_VERSION_TEXTURE_LOW_QUALITY)
-        {
-            stream.ReadBool();
-            stream.ReadUint8();
-        }
-        if (header.mVersion >= ASSET_VERSION_TEXTURE_COOKED_PROPERTIES)
-        {
-            width = stream.ReadUint32();
-            height = stream.ReadUint32();
-            mips = stream.ReadUint32();
-            stream.ReadUint32();                            // filter
-        }
-        uint32_t size = stream.ReadUint32();
-        uint32_t offset = stream.GetPos();
-
-        if (width != mWidth || height != mHeight || mips != mMipLevels || format != mFormat ||
-            size != resource->mTplSize || offset >= sizeof(head))
+        uint32_t offset = 0;
+        uint32_t size = 0;
+        if (!LocateTexels(head, sizeof(head), this, offset, size))
         {
             LogWarning("Texture %s: cannot take %s's texels in place (a different size or format)",
                        GetName().c_str(), assetName.c_str());
@@ -725,6 +886,16 @@ void Texture::Create()
 
 void Texture::Destroy()
 {
+    FinishAsyncReload();                // the background thread may still be writing the buffer
+#if API_GX && !EDITOR && PLATFORM_GAMECUBE
+    while (mStashState == 1)            // or its stash
+    {
+        SYS_Sleep(1);
+    }
+    AUD_FreeAram(mStashAram);
+    mStashAram = 0;
+    mStashState = 0;
+#endif
     Asset::Destroy();
 
     GFX_DestroyTextureResource(this);

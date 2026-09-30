@@ -257,22 +257,91 @@ static MutexObject* GetIsoMutex()
     return sIsoMutex;
 }
 
+// A HANDLE ON THE ISO PER READING THREAD. With one FILE shared by every reader -- the asset
+// loader streaming a sky's diamond frames, the background reader stashing its stars, the music --
+// every change of reader was a seek: stdio's read-ahead (kIsoFileBufferSize) thrown away and read
+// again somewhere else, and libfat walking the ISO's cluster chain from its start to go backwards.
+// Two readers taking turns spent the card's time seeking, and a sky that streams near the card's
+// speed stuttered whenever anything else read. So each thread that reads gets its own FILE on the
+// same ISO, the first time it reads: its own position and its own buffer, and its reads go on
+// forwards from where its last one stopped. (The card still serves one read at a time: the lock
+// stays.) The thread that mounted the ISO keeps sIso; a few more get their own, the rest share sIso.
+static const uint32_t kIsoExtraHandles = 3;
+static constexpr size_t kIsoExtraBufferSize = 32 * 1024;
+struct IsoHandle
+{
+    lwp_t mThread = LWP_THREAD_NULL;
+    FILE* mFile = nullptr;
+    uint32_t mPos = UINT32_MAX;
+    char* mBuffer = nullptr;
+};
+static IsoHandle sIsoHandles[kIsoExtraHandles];
+static lwp_t sIsoOwner = LWP_THREAD_NULL;
+static char sIsoPath[256] = "";
+
+static void IsoCloseExtraHandles()
+{
+    for (IsoHandle& h : sIsoHandles)
+    {
+        if (h.mFile != nullptr) fclose(h.mFile);
+        h.mFile = nullptr;
+        h.mThread = LWP_THREAD_NULL;
+        h.mPos = UINT32_MAX;
+    }
+}
+
+// This thread's FILE and where its position is (under the ISO mutex).
+static FILE* IsoFileForThread(uint32_t*& outPos)
+{
+    const lwp_t self = LWP_GetSelf();
+    if (self != sIsoOwner && sIsoPath[0] != 0)
+    {
+        for (IsoHandle& h : sIsoHandles)
+        {
+            if (h.mFile != nullptr && h.mThread == self)
+            {
+                outPos = &h.mPos;
+                return h.mFile;
+            }
+        }
+        for (IsoHandle& h : sIsoHandles)
+        {
+            if (h.mFile == nullptr)
+            {
+                FILE* f = fopen(sIsoPath, "rb");
+                if (f == nullptr) break;
+                if (h.mBuffer == nullptr) h.mBuffer = (char*)malloc(kIsoExtraBufferSize);
+                if (h.mBuffer != nullptr) setvbuf(f, h.mBuffer, _IOFBF, kIsoExtraBufferSize);
+                h.mFile = f;
+                h.mThread = self;
+                h.mPos = 0;
+                outPos = &h.mPos;
+                return f;
+            }
+        }
+    }
+    outPos = &sIsoFilePos;
+    return sIso;
+}
+
 static bool IsoReadRaw(uint32_t offset, void* buf, uint32_t len)
 {
     SCOPED_LOCK(GetIsoMutex());
 
     if (sIsoMode == ISO_SD)
     {
+        uint32_t* pos = nullptr;
+        FILE* file = IsoFileForThread(pos);
         // Sequential reads (e.g. video streaming) skip the seek: fseek discards stdio's
         // buffered data, and libfat may walk the file's cluster chain to find the offset.
-        if (offset != sIsoFilePos && fseek(sIso, (long)offset, SEEK_SET) != 0)
+        if (offset != *pos && fseek(file, (long)offset, SEEK_SET) != 0)
         {
-            sIsoFilePos = UINT32_MAX;
+            *pos = UINT32_MAX;
             return false;
         }
 
-        const bool ok = fread(buf, 1, len, sIso) == len;
-        sIsoFilePos = ok ? (offset + len) : UINT32_MAX;
+        const bool ok = fread(buf, 1, len, file) == len;
+        *pos = ok ? (offset + len) : UINT32_MAX;
         return ok;
     }
     if (sIsoMode == ISO_DVD)
@@ -391,12 +460,15 @@ static bool IsoOpenSD(const char* isoPath)
     sIso = f;
     sIsoFilePos = 0;
     sIsoMode = ISO_SD;
+    IsoCloseExtraHandles();
+    sIsoOwner = LWP_GetSelf();
+    snprintf(sIsoPath, sizeof(sIsoPath), "%s", isoPath);
     if (IsoParseFst())
     {
         LogDebug("ISO mounted (SD): %s (%u files)", isoPath, (uint32_t)sIsoFiles.size());
         return true;
     }
-    fclose(f); sIso = nullptr; sIsoMode = ISO_NONE;
+    fclose(f); sIso = nullptr; sIsoMode = ISO_NONE; sIsoPath[0] = 0;
     return false;
 }
 
@@ -497,6 +569,7 @@ static void IsoLocate()
                 }
                 IsoLog("ISO scan: %s is not this game", path.c_str());     // another game's image
                 fclose(sIso); sIso = nullptr; sIsoMode = ISO_NONE; sIsoFiles.clear();
+                IsoCloseExtraHandles(); sIsoPath[0] = 0;
             }
             closedir(d);
         }
@@ -788,6 +861,172 @@ bool SYS_ReadFileRange(const char* path, bool isAsset, uint32_t offset, uint32_t
     return sRangeFile != nullptr &&
            fseek(sRangeFile, long(offset), SEEK_SET) == 0 &&
            fread(outData, 1, size, sRangeFile) == size;
+}
+
+// READS IN THE BACKGROUND: SYS_ReadFileRange by a thread of its own, for data the main thread
+// wants soon but must not wait for -- a marathon's change of sky, 4 MB of star frames. The
+// console's SD card gives well under a megabyte a second, so read on the main thread that was
+// half a minute at 7 frames a second (Texture::ReloadFromAsync). A piece at a time, 32 KB, so
+// the disc lock is let go between pieces and the music's reads get in. `state` goes 1 while the
+// read is queued or running, then 2 when it is all in, 3 if it failed. False if the queue is full
+// (nothing queued, state left alone).
+// HALF THE CARD, NOT ALL OF IT: after each piece the thread rests as long as the piece took. At
+// priority 45 it is above the asset loader (40), and without the rest it took the disc lock back
+// the moment it let it go, so nothing the loader was reading arrived until it was done -- a sky's
+// streamed medley stood still for the whole change of sky ("the skybox freezes"). Below the audio
+// thread (50) and the main thread (64).
+typedef bool (*SysReadLocator)(const char* head, uint32_t headSize, void* ctx, uint32_t& offset, uint32_t& size);
+
+#if PLATFORM_GAMECUBE
+void AUD_AramDma(bool toAram, void* mem, uint32_t aram, uint32_t len);   // Audio_Dolphin.cpp
+#endif
+
+namespace
+{
+    struct BackgroundRead
+    {
+        std::string mPath;
+        uint32_t mOffset = 0;
+        uint32_t mSize = 0;
+        char* mDst = nullptr;
+        uint32_t mAram = 0;                 // or into ARAM, through sStaging (when mDst is null)
+        volatile int32_t* mState = nullptr;
+        // With a locator: the file's first 256 bytes are read first, on this thread, and it says
+        // where in the file the data is (a texture's texels: see Texture::StashFrom). So the
+        // caller never reads the card itself, even for a header.
+        SysReadLocator mLocate = nullptr;
+        void* mLocateCtx = nullptr;
+    };
+    alignas(32) char sStaging[32 * 1024];   // the reader thread's own: SD to here, then to ARAM
+
+    const uint32_t kMaxBackgroundReads = 16;
+    const uint32_t kBackgroundPiece = 32 * 1024;
+    BackgroundRead sBackgroundReads[kMaxBackgroundReads];
+    uint32_t sBackgroundHead = 0;
+    uint32_t sBackgroundCount = 0;
+    MutexObject* sBackgroundMutex = nullptr;
+    sem_t sBackgroundSem = LWP_SEM_NULL;
+    lwp_t sBackgroundThread = LWP_THREAD_NULL;
+
+    void* BackgroundReadThread(void*)
+    {
+        while (true)
+        {
+            LWP_SemWait(sBackgroundSem);
+            BackgroundRead read;
+            {
+                SCOPED_LOCK(sBackgroundMutex);
+                if (sBackgroundCount == 0)
+                {
+                    continue;
+                }
+                read = sBackgroundReads[sBackgroundHead];
+                sBackgroundReads[sBackgroundHead] = BackgroundRead();
+                sBackgroundHead = (sBackgroundHead + 1) % kMaxBackgroundReads;
+                sBackgroundCount--;
+            }
+
+            bool ok = true;
+            if (read.mLocate != nullptr)
+            {
+                alignas(32) char head[256];
+                ok = SYS_ReadFileRange(read.mPath.c_str(), true, 0, sizeof(head), head) &&
+                     read.mLocate(head, sizeof(head), read.mLocateCtx, read.mOffset, read.mSize);
+            }
+            for (uint32_t at = 0; ok && at < read.mSize; at += kBackgroundPiece)
+            {
+                const uint32_t n = (read.mSize - at < kBackgroundPiece) ? (read.mSize - at) : kBackgroundPiece;
+                const uint64_t startUs = SYS_GetTimeMicroseconds();
+                if (read.mDst != nullptr)
+                {
+                    ok = SYS_ReadFileRange(read.mPath.c_str(), true, read.mOffset + at, n, read.mDst + at);
+                }
+                else
+                {
+                    ok = SYS_ReadFileRange(read.mPath.c_str(), true, read.mOffset + at, n, sStaging);
+#if PLATFORM_GAMECUBE
+                    if (ok) AUD_AramDma(true, sStaging, read.mAram + at, n);
+#else
+                    ok = false;                     // (no ARAM stash off the GameCube)
+#endif
+                }
+                uint64_t tookUs = SYS_GetTimeMicroseconds() - startUs;
+                if (tookUs < 1000) tookUs = 1000;
+                if (tookUs > 100000) tookUs = 100000;
+                usleep((useconds_t)tookUs);
+            }
+            *read.mState = ok ? 2 : 3;
+        }
+        return nullptr;
+    }
+}
+
+static bool QueueBackgroundRead(const std::string& path, uint32_t offset, uint32_t size, char* dst, uint32_t aram,
+                                volatile int32_t* state, SysReadLocator locate = nullptr, void* locateCtx = nullptr)
+{
+    if ((dst == nullptr && aram == 0) || state == nullptr)
+    {
+        return false;
+    }
+
+    if (sBackgroundThread == LWP_THREAD_NULL)
+    {
+        if (sBackgroundMutex == nullptr)
+        {
+            sBackgroundMutex = SYS_CreateMutex();
+        }
+        // 64 KB of stack: an SD read goes through libfat and the SD driver (see SYS_CreateThread)
+        if ((sBackgroundSem == LWP_SEM_NULL && LWP_SemInit(&sBackgroundSem, 0, kMaxBackgroundReads) != 0) ||
+            LWP_CreateThread(&sBackgroundThread, BackgroundReadThread, nullptr, nullptr, 64 * 1024, 45) != 0)
+        {
+            sBackgroundThread = LWP_THREAD_NULL;
+            return false;
+        }
+    }
+
+    {
+        SCOPED_LOCK(sBackgroundMutex);
+        if (sBackgroundCount == kMaxBackgroundReads)
+        {
+            return false;
+        }
+        BackgroundRead& read = sBackgroundReads[(sBackgroundHead + sBackgroundCount) % kMaxBackgroundReads];
+        read.mPath = path;
+        read.mOffset = offset;
+        read.mSize = size;
+        read.mDst = dst;
+        read.mAram = aram;
+        read.mState = state;
+        read.mLocate = locate;
+        read.mLocateCtx = locateCtx;
+        *state = 1;
+        sBackgroundCount++;
+    }
+    LWP_SemPost(sBackgroundSem);
+    return true;
+}
+
+bool SYS_ReadFileRangeInBackground(const std::string& path, uint32_t offset, uint32_t size, char* dst,
+                                   volatile int32_t* state)
+{
+    return QueueBackgroundRead(path, offset, size, dst, 0, state);
+}
+
+// The same, the file's own header saying where the data is and how much (see mLocate): into `dst`,
+// or into ARAM at `aram` when dst is null. The caller reads nothing itself.
+bool SYS_ReadLocatedInBackground(const std::string& path, SysReadLocator locate, void* ctx, char* dst, uint32_t aram,
+                                 volatile int32_t* state)
+{
+    return locate != nullptr && QueueBackgroundRead(path, 0, 0, dst, aram, state, locate, ctx);
+}
+
+// The same, into ARAM at `aram` (32-byte aligned): read a piece at a time into the thread's own
+// buffer and copied on. For what is wanted later and has no room in main memory meanwhile -- the
+// next zone's sky, read while this one is played (Texture::StashFrom).
+bool SYS_ReadFileRangeToAramInBackground(const std::string& path, uint32_t offset, uint32_t size, uint32_t aram,
+                                         volatile int32_t* state)
+{
+    return QueueBackgroundRead(path, offset, size, nullptr, aram, state);
 }
 
 // Writes a line to the local SD diagnostic log (IsoLog -> /octiso.log) from outside
@@ -1776,7 +2015,15 @@ void SYS_Log(LogSeverity severity, const char* format, va_list arg)
     vsnprintf(line, sizeof(line), format, arg);
     SYS_Report("%s\n", line);
 #else
-    (void)severity; (void)format; (void)arg;
+    // Warnings and errors to the SD card's log (OctLog: queued, written by a thread of its own),
+    // where there is one: on a console they were the one thing a hardware log could not say.
+    // Debug lines stay out -- every asset load is one, and the queue holds 32.
+    if (severity == LogSeverity::Warning || severity == LogSeverity::Error)
+    {
+        char line[480];
+        vsnprintf(line, sizeof(line), format, arg);
+        OctLog("%s", line);
+    }
 #endif
 }
 

@@ -774,7 +774,7 @@ void ApplyWidgetRotation(Mtx& mtx, Widget* widget)
     Mtx srcMat;
     memcpy(srcMat, &mtx, sizeof(float) * 4 * 3);
 
-    guMtxConcat(rotMat, srcMat, mtx);
+    c_guMtxConcat(rotMat, srcMat, mtx);
 }
 
 // A MESH'S DISPLAY LISTS: its faces in batches of at most kBatchFaces, each its own list in its own

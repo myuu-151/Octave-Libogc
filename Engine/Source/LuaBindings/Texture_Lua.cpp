@@ -50,6 +50,60 @@ int Texture_Lua::ReloadPart(lua_State* L)
     return 2;
 }
 
+// texture:ReloadFromAsync(name) -> bool, and texture:IsReloading() -> bool: see Texture::ReloadFromAsync.
+int Texture_Lua::ReloadFromAsync(lua_State* L)
+{
+    Texture* texture = CHECK_TEXTURE(L, 1);
+    const char* name = CHECK_STRING(L, 2);
+
+    lua_pushboolean(L, texture->ReloadFromAsync(name));
+    return 1;
+}
+
+// texture:StashFrom(name) -> bool, texture:IsStashed(name) -> bool, texture:ReloadFromStash() -> bool:
+// see Texture::StashFrom (GameCube only; false elsewhere).
+int Texture_Lua::StashFrom(lua_State* L)
+{
+    Texture* texture = CHECK_TEXTURE(L, 1);
+    const char* name = CHECK_STRING(L, 2);
+
+    lua_pushboolean(L, texture->StashFrom(name));
+    return 1;
+}
+
+int Texture_Lua::IsStashed(lua_State* L)
+{
+    Texture* texture = CHECK_TEXTURE(L, 1);
+    const char* name = CHECK_STRING(L, 2);
+
+    lua_pushboolean(L, texture->IsStashed(name));
+    return 1;
+}
+
+int Texture_Lua::IsStashing(lua_State* L)
+{
+    Texture* texture = CHECK_TEXTURE(L, 1);
+
+    lua_pushboolean(L, texture->IsStashing());
+    return 1;
+}
+
+int Texture_Lua::ReloadFromStash(lua_State* L)
+{
+    Texture* texture = CHECK_TEXTURE(L, 1);
+
+    lua_pushboolean(L, texture->ReloadFromStash());
+    return 1;
+}
+
+int Texture_Lua::IsReloading(lua_State* L)
+{
+    Texture* texture = CHECK_TEXTURE(L, 1);
+
+    lua_pushboolean(L, texture->IsReloading());
+    return 1;
+}
+
 int Texture_Lua::GetWidth(lua_State* L)
 {
     Texture* texture = CHECK_TEXTURE(L, 1);
@@ -137,6 +191,14 @@ void Texture_Lua::Bind()
     REGISTER_TABLE_FUNC(L, mtIndex, ReloadFrom);
 
     REGISTER_TABLE_FUNC(L, mtIndex, ReloadPart);
+
+    REGISTER_TABLE_FUNC(L, mtIndex, ReloadFromAsync);
+
+    REGISTER_TABLE_FUNC(L, mtIndex, IsReloading);
+    REGISTER_TABLE_FUNC(L, mtIndex, StashFrom);
+    REGISTER_TABLE_FUNC(L, mtIndex, IsStashed);
+    REGISTER_TABLE_FUNC(L, mtIndex, IsStashing);
+    REGISTER_TABLE_FUNC(L, mtIndex, ReloadFromStash);
 
     REGISTER_TABLE_FUNC(L, mtIndex, GetWidth);
 

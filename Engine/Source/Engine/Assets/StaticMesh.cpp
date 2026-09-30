@@ -591,10 +591,9 @@ int32_t StaticMesh::StageColorsFrom(const std::string& assetName, uint32_t at, u
         }
         mStagedFrom = assetName;
         mStagedDataAt = stream.GetPos();
-        // Allocated the first time only, and kept (ApplyStagedColors does not free it): a block of
-        // this size taken while the game is being drawn made the whole picture flash with garbage
-        // for as long as it was held. So a game asks once, maxVertices 0, while nothing is drawn --
-        // a loading screen -- and every change of colours after that reuses the same memory.
+        // Allocated the first time only, and kept (ApplyStagedColors does not free it): a game
+        // asks once, maxVertices 0, behind a loading screen, and every change of colours after
+        // that reuses the same memory -- no block of this size wanted in the middle of a run.
         if (mStagedColors.size() != mNumVertices)
         {
             mStagedColors.resize(mNumVertices);
@@ -610,9 +609,10 @@ int32_t StaticMesh::StageColorsFrom(const std::string& assetName, uint32_t at, u
     // A vertex on the disc: position, two texture coordinates, normal, colour -- 44 bytes.
     const uint32_t kVertexBytes = 44;
     const uint32_t kMost = (32 * 1024) / kVertexBytes;
-    // 32-byte aligned, as the texture refills' buffers are. Unaligned, it shared cache lines with
-    // whatever the linker put beside it, and while colours were being read in (a marathon's hold)
-    // the whole 3D picture flashed with garbage, frame after frame. Aligned, not once.
+    // 32-byte aligned, as the texture refills' buffers are: on a GameCube reading the SD card, the
+    // card's DMA can land here directly. (The "whole 3D picture as garbage while colours were read
+    // in" once blamed on this buffer was libogc's broken guMtxConcat reading a float from inside
+    // it: see GxUtils.h.)
     static char sPiece[kMost * kVertexBytes] __attribute__((aligned(32)));
     uint32_t colorScale = GetEngineConfig()->mColorScale;
     uint32_t shiftCount = (colorScale != 1) ? (colorScale >> 1) : 0;
@@ -677,6 +677,64 @@ bool StaticMesh::ApplyStagedColors()
     mStagedFrom.clear();                // (the buffer is kept for the next time: see StageColorsFrom)
     return true;
 #else
+    return false;
+#endif
+}
+
+// WHY. The colours read off the disc (StageColorsFrom) were 44 bytes of vertex for every 4 of
+// colour: some 2 MB for a change of palette, which the console's SD card reads at well under a
+// megabyte a second -- a marathon's change of zone crawled at 7 frames a second for half a
+// minute. Across a pipe's meshes a vertex's colours in all seven palettes come in only ~1,500
+// combinations, so every palette fits in ~135 KB, kept in memory and applied in a few ms.
+bool StaticMesh::SetPaletteColors(const uint8_t* indices, uint32_t indexBytes, const uint8_t* table, uint32_t tableBytes,
+                                  uint32_t palettes, uint32_t palette)
+{
+#if API_GX && !EDITOR
+    StaticMeshResource* resource = GetResource();
+    if (!IsLoaded() || !resource->mCompact || resource->mCompactVertices == nullptr || indices == nullptr ||
+        table == nullptr || indexBytes != mNumVertices * 2 || palettes == 0 || palette >= palettes ||
+        tableBytes % (palettes * 4) != 0)
+    {
+        return false;
+    }
+
+    // every index in the table before anything is written
+    const uint32_t combos = tableBytes / (palettes * 4);
+    for (uint32_t i = 0; i < mNumVertices; ++i)
+    {
+        const uint32_t high = indices[2 * i];
+        if (high < 32 || (((high - 32) << 8) | indices[2 * i + 1]) >= combos)
+        {
+            return false;
+        }
+    }
+
+    // as LoadStream takes a colour: scaled down for the colour scale; then into GX's byte order
+    uint32_t colorScale = GetEngineConfig()->mColorScale;
+    uint32_t shiftCount = (colorScale != 1) ? (colorScale >> 1) : 0;
+    GxWaitGpu();                        // the GPU may still be drawing the last frame with these colours
+    uint8_t* compact = (uint8_t*)resource->mCompactVertices;
+    for (uint32_t i = 0; i < mNumVertices; ++i)
+    {
+        const uint32_t combo = ((uint32_t(indices[2 * i]) - 32) << 8) | indices[2 * i + 1];
+        const uint8_t* c = table + (combo * palettes + palette) * 4;
+        uint32_t color = uint32_t(c[0]) | (uint32_t(c[1]) << 8) | (uint32_t(c[2]) << 16) | (uint32_t(c[3]) << 24);
+        if (shiftCount != 0)
+        {
+            uint8_t* color8 = (uint8_t*)(&color);
+            color8[0] = color8[0] >> shiftCount;
+            color8[1] = color8[1] >> shiftCount;
+            color8[2] = color8[2] >> shiftCount;
+            color8[3] = color8[3] >> shiftCount;
+        }
+        ReverseColorUint32(color);
+        memcpy(compact + i * 16 + 12, &color, 4);
+    }
+    DCFlushRange(compact, mNumVertices * 16);
+    GX_InvVtxCache();
+    return true;
+#else
+    (void)indices; (void)indexBytes; (void)table; (void)tableBytes; (void)palettes; (void)palette;
     return false;
 #endif
 }

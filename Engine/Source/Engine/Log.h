@@ -14,6 +14,9 @@ bool IsLogEnabled();
 void LockLog();
 void UnlockLog();
 
+// The in-game console's queued lines, written into it: the main thread, once a frame.
+void FlushConsoleMessages();
+
 void LogDebug(const char* format, ...);
 void LogWarning(const char* format, ...);
 void LogError(const char* format, ...);

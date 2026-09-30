@@ -115,14 +115,19 @@ bool OctDvdReadAligned(uint32_t alignedOff, void* dst, uint32_t alignedLen)
 // buffer the size of the whole read needed that much again in one piece: late in a
 // long session a 499 KB file failed to load with 680 KB in one piece (the game's
 // own 499 KB already taken), and the game retried it forever.
+// The scratch buffer is a fixed one, not taken from the heap each read: a 64 KB block
+// wanted for every read failed now and then with the heap full, and the read failed
+// with it (a marathon's change of sky left frames half one sky). Every caller holds the
+// disc lock (IsoReadRaw), so one buffer serves them all.
+static uint8_t sBounce[64 * 1024] __attribute__((aligned(32)));
+
 bool OctDvdRead(uint32_t offset, void* buf, uint32_t len)
 {
-    const uint32_t kPiece = 64 * 1024;
+    const uint32_t kPiece = sizeof(sBounce);
     uint32_t head    = offset & 31u;
     uint32_t scratch = (head + len + 31u) & ~31u;
     if (scratch > kPiece) scratch = kPiece;
-    uint8_t* tmp = (uint8_t*)memalign(32, scratch);
-    if (tmp == nullptr) return false;
+    uint8_t* tmp = sBounce;
     uint8_t* out = (uint8_t*)buf;
     bool ok = true;
     while (ok && len > 0)
@@ -137,7 +142,6 @@ bool OctDvdRead(uint32_t offset, void* buf, uint32_t len)
         offset += n;
         len -= n;
     }
-    free(tmp);
     return ok;
 }
 

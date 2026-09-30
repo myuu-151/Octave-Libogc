@@ -158,19 +158,36 @@ int System_Lua::GetAramStats(lua_State* L)
     return 3;
 }
 
-// System.PinBlocks(bytes): on the GameCube, freed blocks of this size (to an eighth over) are kept
-// for the next allocation of it and never given back to the heap (BigBlockCache_Dolphin.cpp) -- for
-// what is streamed in and out all the time at one size, a sky's frames. 0 stops. Nothing elsewhere.
+// System.PinBlocks(bytes[, count[, reserve]]): on the GameCube, freed blocks of this size (up to
+// `count` of them, 8 if not given) are kept for the next allocation of it and never given back to
+// the heap (BigBlockCache_Dolphin.cpp) -- for what is loaded again and again at one size: a sky's
+// frames, a stage's biggest meshes. With `reserve`, that many blocks are taken now (at boot, while
+// the heap is in one piece) and kept, so even the first allocation of the size finds one. Each call
+// pins one more size (up to 8 sizes); 0 unpins them all. Nothing elsewhere.
 #if PLATFORM_GAMECUBE
-void BigBlockCachePin(size_t size);
+void BigBlockCachePin(size_t size, uint32_t count);
+void BigBlockCacheReserve(size_t size, uint32_t count);
 #endif
 int System_Lua::PinBlocks(lua_State* L)
 {
     lua_Integer bytes = luaL_checkinteger(L, 1);
+    lua_Integer count = luaL_optinteger(L, 2, 8);
+    bool reserve = lua_toboolean(L, 3) != 0;
 #if PLATFORM_GAMECUBE
-    BigBlockCachePin(bytes > 0 ? (size_t)bytes : 0);
+    const size_t size = bytes > 0 ? (size_t)bytes : 0;
+    const uint32_t n = count > 0 ? (uint32_t)count : 0;
+    if (reserve && size != 0)
+    {
+        BigBlockCacheReserve(size, n);
+    }
+    else
+    {
+        BigBlockCachePin(size, n);
+    }
 #else
     (void)bytes;
+    (void)count;
+    (void)reserve;
 #endif
     return 0;
 }

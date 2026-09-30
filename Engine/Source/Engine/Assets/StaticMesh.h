@@ -80,6 +80,15 @@ public:
     int32_t StageColorsFrom(const std::string& assetName, uint32_t at, uint32_t maxVertices, uint32_t& outTotal);
     bool ApplyStagedColors();
 
+    // Console only (GX), for a COMPACT mesh: its colours from a table of the colours it has in
+    // each of several palettes, at once and without reading anything. `indices` is 2 bytes a
+    // vertex -- which combination of colours the vertex has, high byte first and plus 32 --
+    // and `table` every combination's colour in each of `palettes` palettes, 4 bytes each,
+    // little-endian (as a mesh file holds its colours), palette 0 first. See Sonic Pipe Dream's
+    // native/make_pipe_palettes.py. False (and nothing changed) if the data does not fit the mesh.
+    bool SetPaletteColors(const uint8_t* indices, uint32_t indexBytes, const uint8_t* table, uint32_t tableBytes,
+                          uint32_t palettes, uint32_t palette);
+
     // Every vertex's position and colour, set anew (a mesh with vertex colours, the same number of
     // vertices): a shape drawn afresh each frame, such as a trail traced behind something. xyz is
     // 3 floats a vertex; rgba 1 packed colour a vertex (r | g << 8 | b << 16 | a << 24, as the

@@ -13,6 +13,23 @@ class Widget;
 
 #include <gccore.h>
 
+// NEVER libogc's paired-single guMtxConcat (ps_guMtxConcat): it is BROKEN in the libogc this is
+// built with (3.0.4). It loads the 0 of its constant { 0, 1 } (Unit01) with a psq_l addressed off
+// r13 by an R_PPC_SDAREL16 relocation, and psq_l has only 12 bits of offset: the linker writes
+// all 16, the top ones land in the instruction's W and I fields, and it loads ONE float (the 1
+// comes free) from 608 bytes past r13 -- whatever variable the link happens to put there. Every
+// matrix it makes then has that float times the first matrix's translation in its third column.
+// In Sonic Pipe Dream the address was inside StaticMesh::StageColorsFrom's read buffer: once a
+// marathon's hold read colours into it, every 3D object was drawn with a garbage matrix --
+// "stripes to a single point", the frame rate gone -- for as long as the game ran. It was zero
+// until then, so all was well; another build's layout puts another variable there. The C concat
+// is correct, and the engine calls it by name: c_guMtxConcat. The name guMtxConcat is pointed at
+// it too, so a new call written the usual way cannot bring the broken one back. (No other libogc
+// routine has such a load: the rest of gu_psasm reaches its constants with lfs, which has the 16
+// bits. Check with: objdump -d -M gekko on the .elf and grep for a psq_l or psq_st off r13 or r2.)
+#undef guMtxConcat
+#define guMtxConcat c_guMtxConcat
+
 void SetupLights();
 void SetupLightMask(ShadingModel shadingModel,  uint8_t lightingChannels, bool useBakedLight);
 void SetupLightingChannels();

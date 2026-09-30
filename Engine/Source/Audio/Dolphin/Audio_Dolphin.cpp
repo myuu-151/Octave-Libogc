@@ -557,6 +557,19 @@ static uint32_t AramAlloc(uint32_t len)
     return at;
 }
 
+// ARAM for anything, not only sounds (a texture's stash: Texture::StashFrom). 0 if there is none.
+uint32_t AUD_AllocAram(uint32_t len)
+{
+    return sAramReady ? AramAlloc(len) : 0;
+}
+
+// A copy between main memory and ARAM (32-byte aligned; the length rounds up to 32), from any
+// thread: each 8 KB piece runs with interrupts off, so it never meets the sound voices' own.
+void AUD_AramDma(bool toAram, void* mem, uint32_t aram, uint32_t len)
+{
+    AramDma(toAram ? AR_MRAMTOARAM : AR_ARAMTOMRAM, mem, aram, len);
+}
+
 void AUD_FreeAram(uint32_t aramAddress)
 {
     if (!sAramReady || aramAddress == 0)

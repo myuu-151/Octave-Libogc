@@ -200,9 +200,12 @@ uint32_t OctRetraceCount();     // System_Dolphin.cpp
 
 void GxWaitGpu()
 {
-    // Everything queued so far, this frame's commands included.
+    // Everything queued so far, this frame's commands included. A frame in flight STAYS in flight:
+    // GFX_BeginFrame still has to show it (its wait then returns at once). Marked done here, it was
+    // never handed to the video interface -- a dropped frame -- and the next one was copied into
+    // the framebuffer on screen, torn, on every frame that waited here: all through a marathon's
+    // hold (ApplyStagedColors) and a sky's change of stars (Texture::ReloadPart).
     GX_DrawDone();
-    sFrameInFlight = false;
 #if PROFILING_ENABLED
     GpMetricsFrameDone();
 #endif
@@ -877,6 +880,10 @@ void GFX_CreateStaticMeshResource(StaticMesh* staticMesh, bool hasColor, uint32_
             ReverseColorUint32(compactVerts[i].mColor);
         }
         DCFlushRange(compactVerts, numVertices * sizeof(CompactVertex));
+        // The array may be in a block another mesh's array was drawn from (BigBlockCache hands big
+        // blocks on), and the compact path of BindStaticMesh does not invalidate the GPU's vertex
+        // cache: done here, or a GameCube could draw it with the other mesh's vertices.
+        GX_InvVtxCache();
         resource->mColorDisplayList = CreateMeshDisplayList(staticMesh, true, resource->mColorDisplayListSize, true);
         resource->mCompactVertices = staticMesh->TakeVertexArray();
         resource->mCompact = true;
@@ -902,6 +909,7 @@ void GFX_CreateStaticMeshResource(StaticMesh* staticMesh, bool hasColor, uint32_
                 out[i].mColor = src[i].mColor;          // already in GX's order (above)
             }
             DCFlushRange(out, numVertices * sizeof(CompactVertex));
+            GX_InvVtxCache();                           // (see above)
             resource->mColorDisplayList = CreateMeshDisplayList(staticMesh, true, resource->mColorDisplayListSize, true);
             if (resource->mColorDisplayList != nullptr)
             {
@@ -1021,7 +1029,7 @@ void GFX_DrawStaticMeshComp(StaticMesh3D* staticMeshComp, StaticMesh* meshOverri
 
         memcpy(model, &modelSrc, sizeof(float) * 4 * 3);
         memcpy(view, &viewSrc, sizeof(float) * 4 * 3);
-        guMtxConcat(view, model, modelView);
+        c_guMtxConcat(view, model, modelView);
 
         GX_LoadPosMtxImm(modelView, GX_PNMTX0);
 
@@ -1136,7 +1144,7 @@ void GFX_DrawSkeletalMeshComp(SkeletalMesh3D* skeletalMeshComp)
 
         memcpy(model, &modelSrc, sizeof(float) * 4 * 3);
         memcpy(view, &viewSrc, sizeof(float) * 4 * 3);
-        guMtxConcat(view, model, modelView);
+        c_guMtxConcat(view, model, modelView);
 
         Mtx modelViewInv;
         Mtx normalMtx;
@@ -1159,11 +1167,11 @@ void GFX_DrawSkeletalMeshComp(SkeletalMesh3D* skeletalMeshComp)
                 Mtx bone;
                 glm::mat4 boneSrc = glm::transpose(skeletalMeshComp->GetBoneTransform(i));
                 memcpy(bone, &boneSrc, sizeof(float) * 4 * 3);
-                guMtxConcat(modelView, bone, fullTransform);
+                c_guMtxConcat(modelView, bone, fullTransform);
                 GX_LoadPosMtxImm(fullTransform, GX_PNMTX0 + i*3);
 
                 Mtx normalTransform;
-                guMtxConcat(normalMtx, bone, normalTransform);
+                c_guMtxConcat(normalMtx, bone, normalTransform);
                 GX_LoadNrmMtxImm(normalTransform, GX_PNMTX0 + i*3);
             }
         }
@@ -1286,7 +1294,7 @@ void GFX_DrawShadowMeshComp(ShadowMesh3D* shadowMeshComp)
 
         memcpy(model, &modelSrc, sizeof(float) * 4 * 3);
         memcpy(view, &viewSrc, sizeof(float) * 4 * 3);
-        guMtxConcat(view, model, modelView);
+        c_guMtxConcat(view, model, modelView);
 
         GX_LoadPosMtxImm(modelView, GX_PNMTX0);
 
@@ -1391,7 +1399,7 @@ void GFX_DrawTextMeshComp(TextMesh3D* textMeshComp)
 
     memcpy(model, &modelSrc, sizeof(float) * 4 * 3);
     memcpy(view, &viewSrc, sizeof(float) * 4 * 3);
-    guMtxConcat(view, model, modelView);
+    c_guMtxConcat(view, model, modelView);
 
     GX_LoadPosMtxImm(modelView, GX_PNMTX0);
 
@@ -1482,7 +1490,7 @@ void GFX_DrawParticleComp(Particle3D* particleComp)
 
         memcpy(model, &modelSrc, sizeof(float) * 4 * 3);
         memcpy(view, &viewSrc, sizeof(float) * 4 * 3);
-        guMtxConcat(view, model, modelView);
+        c_guMtxConcat(view, model, modelView);
 
         GX_LoadPosMtxImm(modelView, GX_PNMTX0);
 

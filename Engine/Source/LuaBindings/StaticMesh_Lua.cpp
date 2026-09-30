@@ -52,6 +52,26 @@ int StaticMesh_Lua::ApplyStagedColors(lua_State* L)
     return 1;
 }
 
+// mesh:SetPaletteColors(indices, table, palettes, palette) -> bool: the mesh's colours in palette
+// `palette` (1 first) of a table of them: see StaticMesh::SetPaletteColors. indices and table are
+// strings of bytes.
+int StaticMesh_Lua::SetPaletteColors(lua_State* L)
+{
+    StaticMesh* mesh = CHECK_STATIC_MESH(L, 1);
+    size_t indexBytes = 0;
+    size_t tableBytes = 0;
+    const char* indices = luaL_checklstring(L, 2, &indexBytes);
+    const char* table = luaL_checklstring(L, 3, &tableBytes);
+    int32_t palettes = (int32_t)CHECK_INTEGER(L, 4);
+    int32_t palette = (int32_t)CHECK_INTEGER(L, 5);
+
+    bool done = palettes > 0 && palette >= 1 &&
+        mesh->SetPaletteColors((const uint8_t*)indices, (uint32_t)indexBytes, (const uint8_t*)table,
+                               (uint32_t)tableBytes, (uint32_t)palettes, (uint32_t)(palette - 1));
+    lua_pushboolean(L, done);
+    return 1;
+}
+
 // mesh:SetVertexData(xyz, rgba) -> bool: every vertex's position and colour, set anew (see
 // StaticMesh::SetVertexData). xyz is a flat table of 3 numbers a vertex; rgba of 4 a vertex, 0-1.
 int StaticMesh_Lua::SetVertexData(lua_State* L)
@@ -245,6 +265,8 @@ void StaticMesh_Lua::Bind()
     REGISTER_TABLE_FUNC(L, mtIndex, StageColorsFrom);
 
     REGISTER_TABLE_FUNC(L, mtIndex, ApplyStagedColors);
+
+    REGISTER_TABLE_FUNC(L, mtIndex, SetPaletteColors);
 
     REGISTER_TABLE_FUNC(L, mtIndex, SetVertexData);
 

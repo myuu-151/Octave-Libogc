@@ -25,6 +25,25 @@ public:
     // The same, a piece at a time: up to maxBytes from byte `at`. Returns where the next piece
     // starts (outTotal, the texel bytes, when done), or -1.
     int32_t ReloadPart(const std::string& assetName, uint32_t at, uint32_t maxBytes, uint32_t& outTotal);
+    // ReloadFrom, read by a background thread: returns at once (false if it cannot: another size or
+    // format, or no room to queue it). The texture is half one picture and half the other until
+    // the read is in, so refill one that is not on the screen. IsReloading is true until then; the
+    // call that finds it done puts the new texels up (and after that it is false).
+    bool ReloadFromAsync(const std::string& assetName);
+    bool IsReloading();
+    // GameCube only: another texture's texels read in the background into ARAM, this texture's own
+    // stash (the texture itself untouched, so it can be on the screen meanwhile); then, when wanted,
+    // copied in from there in a few milliseconds. For a picture needed at a moment's notice that
+    // the SD card takes seconds to give: a marathon's next sky. StashFrom is false when it cannot
+    // (another size or format, no ARAM, a stash already being read); IsStashed(name) is true once
+    // that asset's texels are all in; ReloadFromStash puts them up (false if there is no stash).
+    bool StashFrom(const std::string& assetName);
+    bool IsStashed(const std::string& assetName) const;
+    bool IsStashing() const;            // a stash being read now
+    // Where a texture file's texels start and how many there are, from its first bytes, if they
+    // fit this texture (ctx): for the background reader (see the .cpp).
+    static bool LocateTexels(const char* head, uint32_t headSize, void* ctx, uint32_t& offset, uint32_t& size);
+    bool ReloadFromStash();
 
     // Asset Interface
     virtual void LoadStream(Stream& stream, Platform platform) override;
@@ -77,6 +96,11 @@ protected:
 
     std::string mReloadSource;          // ReloadPart: the asset being read in, and where its texels start
     uint32_t mReloadOffset = 0;
+    volatile int32_t mAsyncReload = 0;  // ReloadFromAsync: 0 none, 1 reading, 2 read, 3 failed
+    void FinishAsyncReload();           // wait for one to be in (before the buffer is refilled or freed)
+    uint32_t mStashAram = 0;            // StashFrom: its ARAM block (kept for the next), the asset in it,
+    std::string mStashSource;           // and 0 none, 1 reading, 2 in, 3 failed
+    volatile int32_t mStashState = 0;
 
     uint32_t mWidth;
     uint32_t mHeight;

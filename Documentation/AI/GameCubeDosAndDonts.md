@@ -32,7 +32,7 @@ Paths under `Engine/Source/`. Read these before writing the same thing.
 | Pads | `Input/Dolphin/Input_Dolphin.cpp` |
 | Memory card | `System/Dolphin/System_Dolphin.cpp` |
 | Logging | `OctLog` in `System/Dolphin/System_Dolphin.cpp` |
-| Heap fragmentation | `System/Dolphin/BigBlockCache_Dolphin.cpp` |
+| Heap fragmentation (big blocks of repeating sizes) | `System/Dolphin/BigBlockCache_Dolphin.cpp` |
 
 Also read the `\bug` and `\note` lines in libogc's headers
 (`devkitPro/libogc/include/ogc/*.h`) for any GX call you use in a new way.
@@ -102,6 +102,25 @@ Reuse big blocks instead of freeing and allocating them again.
 `-Wl,--wrap=malloc,--wrap=free,--wrap=realloc,--wrap=calloc,--wrap=memalign`
 (see `Standalone/Makefile_GCN`).
 
+**Do** measure before linking the big block cache into a game that isn't
+built on it. It suits big allocations that come back at the same sizes (a
+sky's frames, the same stage pieces). Where they vary (each level's file,
+textures of many sizes), it holds freed blocks for sizes that never return: in
+one game it kept about 3 MB, and the biggest free piece while playing fell from
+about 1 MB to under 250 KB. **Don't** find the biggest free piece by trying
+`malloc` through the cache: a failed try empties it, and a successful big one
+gets kept. Try `__real_malloc`.
+
+**Don't** keep a table that only grows in a `std::vector`. Each time it
+fills, it copies itself into one block twice the size, needing both at once,
+late in a session when no piece that big is left. **Do** use a `std::deque`
+(it grows in small pieces and never moves its elements), or reserve the
+vector's final size at boot.
+
+**Don't** leave dead objects waiting for a cleanup that runs every N new ones.
+Until it runs, up to N of them per owner are still using memory: a sweep every
+1024 display nodes held about 540 KB. Keep N small, or free them when they die.
+
 **Don't** read a file whole and then copy it (a temp buffer plus the final copy
 is double the memory). **Do** read straight into where it will live:
 `SYS_ReadFileRange` into the texture's own texels, as `Texture::ReloadPart`
@@ -141,6 +160,11 @@ access your code makes itself: reads, writes, logs, `stat()`. The SD driver
 keeps shared state, and two threads in it at once hang the card. Octave's own
 reads and `OctLog` already take this lock.
 
+**Don't** read through a scratch buffer as big as the read. That needs the
+data's size twice, in one piece. The disc reader did this for unaligned reads
+until a 499 KB file failed to load late in a session with 680 KB in one piece.
+**Do** read through a small fixed buffer, a piece at a time.
+
 **Don't** add a thread when Octave reads on the main thread for the same job.
 For a texture needed later, read it a piece a frame with `SYS_ReadFileRange`,
 like `Texture::ReloadPart`.
@@ -176,7 +200,9 @@ EXI device, which can disturb the RTC or hang. **Do** use `OctLog`: it goes to
 `/octiso.log` on the SD card through a low-priority writer thread, and to
 Dolphin's log window when there is no card. The SD log only exists when
 `Engine/Source/System/Dolphin/IsoLog_local.h` is present (copy it from
-`IsoLog_local.h.off`; it is git-ignored).
+`IsoLog_local.h.off`; it is git-ignored). `OctLog` queues at most 32 lines:
+a longer burst loses its end, and says only "N log lines dropped". Keep a
+report under 32 lines.
 
 **Do** add a watchdog to any game about to be tested on hardware: a thread
 above every other (priority 100, 64 KB stack) that logs where the main thread
@@ -191,6 +217,13 @@ usually names the cause. Guessing cost many round trips on earlier bugs.
 
 **Do** reproduce game-logic bugs on the PC build first. Only code that is
 GameCube-specific needs the console.
+
+**Do**, for memory that runs out after a long session, replay a recorded
+session in Dolphin rather than playing by hand. Count what each caller of
+`operator new` holds, and at every level load list the callers that grew
+most since the first level, not the biggest ones. The biggest are usually
+fine. Name them with `powerpc-eabi-addr2line`. Before blaming the allocator,
+check whether the growth is live data or waste.
 
 **Do**, for a silent freeze in Dolphin, attach Dolphin's GDB stub before
 anything else (`[General] GDBPort`), and map the PC with

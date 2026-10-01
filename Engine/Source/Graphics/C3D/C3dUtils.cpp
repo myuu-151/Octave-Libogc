@@ -260,7 +260,9 @@ void BindMaterial(MaterialLite* material, Primitive3D* primitive, bool useVertex
             if (i == 0 && texture == nullptr)
                 texture = Renderer::Get()->mWhiteTexture.Get<Texture>();
 
+            // Warp (indirect) slots are not done on the 3DS: the slot is skipped like Pass.
             if (tevMode != TevMode::Pass &&
+                tevMode != TevMode::Warp &&
                 tevMode != TevMode::Count &&
                 texture != nullptr)
             {

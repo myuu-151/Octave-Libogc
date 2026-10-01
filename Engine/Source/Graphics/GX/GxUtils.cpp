@@ -170,6 +170,9 @@ void PrepareForwardRendering()
 
 void PrepareUiRendering()
 {
+    // Widgets set up their own TEV stages; none of them may read a warp material's indirect stage.
+    GxResetIndirect();
+
     GX_SetCullMode(GX_CULL_NONE);
     GX_SetColorUpdate(GX_TRUE);
     GX_SetAlphaUpdate(GX_FALSE);
@@ -213,7 +216,109 @@ bool IsCpuSkinningRequired(SkeletalMesh3D* component)
     }
 }
 
-void BindMaterial(MaterialLite* material, bool useVertexColor, bool useBakedLighting)
+void LoadEnvTexMtx(const Mtx normalMtx)
+{
+    if (!gGxContext.mEnvMapBound)
+    {
+        return;
+    }
+
+    // The texgen reads the raw (object space) normal, so the matrix takes it to view space first.
+    // The normal matrix is the inverse transpose of the model-view: an object scaled by s gives
+    // rows 1/s long. Its determinant is then 1/s^3, so scale back by the cube root to keep the
+    // coordinates on the matcap. (Non-uniform scale cannot be undone per object; GX has no
+    // per-vertex normalize without dual texgen, so such an object's mapping is a little off.)
+    const float det =
+        normalMtx[0][0] * (normalMtx[1][1] * normalMtx[2][2] - normalMtx[1][2] * normalMtx[2][1]) -
+        normalMtx[0][1] * (normalMtx[1][0] * normalMtx[2][2] - normalMtx[1][2] * normalMtx[2][0]) +
+        normalMtx[0][2] * (normalMtx[1][0] * normalMtx[2][1] - normalMtx[1][1] * normalMtx[2][0]);
+    const float absDet = fabsf(det);
+    const float k = (absDet > 1e-12f) ? 1.0f / cbrtf(absDet) : 1.0f;
+
+    // u = n_view.x * 0.5 + 0.5, v = -n_view.y * 0.5 + 0.5 (see UV_MAP_ENVIRONMENT); q = 1, as a
+    // 3x4 texgen divides by its third row.
+    Mtx env;
+    for (uint32_t c = 0; c < 3; ++c)
+    {
+        env[0][c] = 0.5f * k * normalMtx[0][c];
+        env[1][c] = -0.5f * k * normalMtx[1][c];
+        env[2][c] = 0.0f;
+    }
+    env[0][3] = 0.5f;
+    env[1][3] = 0.5f;
+    env[2][3] = 1.0f;
+
+    GX_LoadTexMtxImm(env, GX_TEXMTX2, GX_TG_MTX3x4);
+}
+
+// The texgen for a texture slot's coordinates, by its UV map.
+static void SetupSlotTexGen(uint32_t texIdx, uint32_t uvMap, bool hasNormals)
+{
+    if (uvMap == UV_MAP_ENVIRONMENT && hasNormals)
+    {
+        // Sphere map: coordinates from the vertex normal through GX_TEXMTX2, which the draw
+        // loads per object (LoadEnvTexMtx) once its normal matrix is known.
+        GX_SetTexCoordGen(GX_TEXCOORD0 + texIdx, GX_TG_MTX3x4, GX_TG_NRM, GX_TEXMTX2);
+        gGxContext.mEnvMapBound = true;
+    }
+    else if (uvMap == UV_MAP_ENVIRONMENT)
+    {
+        // No normals in this draw's vertices (particles): use UV 0 rather than read a
+        // normal that is not there.
+        GX_SetTexCoordGen(GX_TEXCOORD0 + texIdx, GX_TG_MTX3x4, GX_TG_TEX0, GX_TEXMTX0);
+    }
+    else
+    {
+        GX_SetTexCoordGen(GX_TEXCOORD0 + texIdx, GX_TG_MTX3x4, GX_TG_TEX0 + uvMap, GX_TEXMTX0 + uvMap * 3);
+    }
+}
+
+// Loads the indirect matrix that turns a warp map's bytes into offsets for one warped texture.
+// The indirect unit reads the warp map's A, B and G as S, T and U, biased by -128
+// (GX_ITB_STU), and adds M * [S T U] * 2^scaleExp to the stage's coordinates, in texels of the
+// texture that stage samples. We want (byte - 128) / 256 * strength in normalised coordinates,
+// that is (byte - 128) * strength * size / 256 texels: U (green) drives the S offset and T
+// (blue) the T offset. The matrix holds values below 1 with 10 fractional bits, so the factor is
+// split into a mantissa in [0.5, 1) and a power of two.
+static void LoadWarpIndMtx(uint8_t indMtx, float strength, uint16_t width, uint16_t height)
+{
+    const float s = strength * float(width) / 256.0f;
+    const float t = strength * float(height) / 256.0f;
+
+    int32_t exp = 0;
+    frexpf(std::max(s, t), &exp);
+    exp = glm::clamp(exp, -17, 46);
+    const float k = ldexpf(1.0f, -exp);
+
+    f32 mtx[2][3] =
+    {
+        { 0.0f, 0.0f, std::min(s * k, 1023.0f / 1024.0f) },
+        { 0.0f, std::min(t * k, 1023.0f / 1024.0f), 0.0f },
+    };
+    GX_SetIndTexMatrix(indMtx, mtx, int8_t(exp));
+}
+
+void GxResetIndirect()
+{
+    uint32_t mask = gGxContext.mIndirectTevMask;
+    if (mask == 0)
+    {
+        return;
+    }
+
+    for (uint32_t stage = 0; stage < 16; ++stage)
+    {
+        if (mask & (1u << stage))
+        {
+            GX_SetTevDirect(stage);
+        }
+    }
+
+    GX_SetNumIndStages(0);
+    gGxContext.mIndirectTevMask = 0;
+}
+
+void BindMaterial(MaterialLite* material, bool useVertexColor, bool useBakedLighting, bool hasNormals)
 {
     // If we are using vertex color modulation, then we need to use the first channel
     // since there is only one color vertex attribute.
@@ -244,7 +349,21 @@ void BindMaterial(MaterialLite* material, bool useVertexColor, bool useBakedLigh
     uint32_t tevStage = 0;
     bool vertexColorBlend = (vertexColorMode == VertexColorMode::TextureBlend);
 
+    // A warp slot (TevMode::Warp) is an indirect map: it gets no colour stage of its own, and is
+    // bound after the direct slots, so they keep the texcoords/texmaps they would have if it were
+    // Pass. Indirect state left by the previous material is turned off first.
+    GxResetIndirect();
+
+    int32_t warpSlot = material->GetWarpSlot();
+    Texture* warpTexture = (warpSlot >= 0) ? material->GetTexture(uint32_t(warpSlot)) : nullptr;
+
+    // The TEV stage that samples each direct slot, and that slot's texture (for its size).
+    uint8_t warpedStages[MATERIAL_LITE_MAX_TEXTURES] = {};
+    GXTexObj* warpedTexObjs[MATERIAL_LITE_MAX_TEXTURES] = {};
+    uint32_t numWarped = 0;
+
     uint32_t texIdx = 0;
+    gGxContext.mEnvMapBound = false;
     for (uint32_t i = 0; i < 4; ++i)
     {
         Texture* texture = material->GetTexture(i);
@@ -255,16 +374,51 @@ void BindMaterial(MaterialLite* material, bool useVertexColor, bool useBakedLigh
             texture = Renderer::Get()->mWhiteTexture.Get<Texture>();
 
         if (tevMode != TevMode::Pass &&
+            tevMode != TevMode::Warp &&
             tevMode != TevMode::Count &&
             texture != nullptr)
         {
-            GX_SetTexCoordGen(GX_TEXCOORD0 + texIdx, GX_TG_MTX3x4, GX_TG_TEX0 + uvMap, GX_TEXMTX0 + uvMap * 3);
+            SetupSlotTexGen(texIdx, uvMap, hasNormals);
             GX_LoadTexObj(&texture->GetResource()->mGxTexObj, GX_TEXMAP0 + texIdx);
 
             tevStage = ConfigTev(tevStage, texIdx, tevMode, vertexColorBlend);
 
+            // ConfigTev's last stage is the one that samples the texture.
+            warpedStages[numWarped] = tevStage - 1;
+            warpedTexObjs[numWarped] = &texture->GetResource()->mGxTexObj;
+            numWarped++;
+
             texIdx++;
         }
+    }
+
+    if (warpTexture != nullptr && numWarped > 0)
+    {
+        // The warp map gets its own texcoord (scaled by its own size), generated like any slot's.
+        SetupSlotTexGen(texIdx, material->GetUvMap(uint32_t(warpSlot)), hasNormals);
+        GX_LoadTexObj(&warpTexture->GetResource()->mGxTexObj, GX_TEXMAP0 + texIdx);
+
+        GX_SetNumIndStages(1);
+        GX_SetIndTexOrder(GX_INDTEXSTAGE0, GX_TEXCOORD0 + texIdx, GX_TEXMAP0 + texIdx);
+        GX_SetIndTexCoordScale(GX_INDTEXSTAGE0, GX_ITS_1, GX_ITS_1);
+
+        // One indirect matrix per direct slot (there are three, and at most three direct slots),
+        // as the offset is in texels of the texture being warped.
+        const float strength = material->GetWarpStrength();
+        OCT_ASSERT(numWarped <= 3);
+        for (uint32_t k = 0; k < numWarped; ++k)
+        {
+            LoadWarpIndMtx(GX_ITM_0 + k, strength,
+                GX_GetTexObjWidth(warpedTexObjs[k]), GX_GetTexObjHeight(warpedTexObjs[k]));
+
+            // As GX_SetTevIndWarp(stage, 0, GX_TRUE, GX_FALSE, mtx): signed 8-bit offsets added to
+            // the stage's coordinates. Bias on all of S, T, U; only T (blue) and U (green) are used.
+            GX_SetTevIndirect(warpedStages[k], GX_INDTEXSTAGE0, GX_ITF_8, GX_ITB_STU, GX_ITM_0 + k,
+                GX_ITW_OFF, GX_ITW_OFF, GX_FALSE, GX_FALSE, GX_ITBA_OFF);
+            gGxContext.mIndirectTevMask |= (1u << warpedStages[k]);
+        }
+
+        texIdx++;
     }
 
     GX_SetNumTexGens(texIdx);

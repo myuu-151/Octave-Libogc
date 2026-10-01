@@ -48,9 +48,10 @@ static const char* sTevModeStrings[] =
     "Signed Add",
     "Subtract",
     "Interpolate",
-    "Pass"
+    "Pass",
+    "Warp"
 };
-static_assert(int32_t(TevMode::Count) == 8, "Need to update string conversion table");
+static_assert(int32_t(TevMode::Count) == 9, "Need to update string conversion table");
 
 FORCE_LINK_DEF(MaterialLite);
 DEFINE_ASSET(MaterialLite);
@@ -676,9 +677,10 @@ uint32_t MaterialLite::GetUvMap(uint32_t textureSlot)
 void MaterialLite::SetUvMap(uint32_t textureSlot, uint32_t uvMapIndex)
 {
     OCT_ASSERT(textureSlot < MATERIAL_LITE_MAX_TEXTURES);
-    OCT_ASSERT(uvMapIndex < MAX_UV_MAPS);
+    bool validUvMap = (uvMapIndex < MAX_UV_MAPS || uvMapIndex == UV_MAP_ENVIRONMENT);
+    OCT_ASSERT(validUvMap);
     if (textureSlot < MATERIAL_LITE_MAX_TEXTURES &&
-        uvMapIndex < MAX_UV_MAPS)
+        validUvMap)
     {
         mLiteParams.mUvMaps[textureSlot] = uvMapIndex;
     }
@@ -705,4 +707,22 @@ void MaterialLite::SetTevMode(uint32_t textureSlot, TevMode mode)
     {
         mLiteParams.mTevModes[textureSlot] = mode;
     }
+}
+
+int32_t MaterialLite::GetWarpSlot()
+{
+    if (!(mLiteParams.mEmission > 0.0f))
+    {
+        return -1;
+    }
+
+    for (uint32_t i = MATERIAL_LITE_WARP_MIN_SLOT; i < MATERIAL_LITE_MAX_TEXTURES; ++i)
+    {
+        if (GetTevMode(i) == TevMode::Warp)
+        {
+            return int32_t(i);
+        }
+    }
+
+    return -1;
 }

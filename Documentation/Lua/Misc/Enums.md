@@ -24,6 +24,8 @@ Tables that act as enumerations.
  - `SignedAdd` Add (color - 0.5) to previous color
  - `Subtract` Subtract previous color from this color
  - `Interpolate` Not yet implemented. (Blend between this sample and previous sample based on uniform value)
+ - `Pass` Skip this texture slot
+ - `Warp` Not drawn: this slot's texture offsets the other slots' texture coordinates (indirect texturing, e.g. rippling water). Green moves U and blue moves V, 128 being no offset; the offset is `(byte - 128) / 256 * strength`, where strength is the material's Emission (`MaterialLite:SetEmission`). Slots 1 to 3 only, one per material. GameCube (indirect texture unit) and Vulkan; ignored on 3DS.
 
 ## AnchorMode
 

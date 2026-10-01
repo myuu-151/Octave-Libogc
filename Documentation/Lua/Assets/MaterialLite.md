@@ -137,6 +137,8 @@ Sig: `emission = MaterialLite:GetEmission()`
 ### SetEmission
 Set the emission intensity. This is only used by the experimental light baking and path tracing mode.
 
+On a material with a `TevMode.Warp` slot, this value is instead the warp strength (see [TevMode](../Misc/Enums.md#tevmode)), and the material does not emit light in the bake.
+
 Sig: `MaterialLite:SetEmission(emission)`
  - Arg: `number emission` Emission intensity
 ---

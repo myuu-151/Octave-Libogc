@@ -272,7 +272,8 @@ vec3 PathTrace(Ray ray, inout uint rngState)
             }
 
             // For now, only unlit objects can emit light.
-            float emission = material.mEmission;
+            // On a material with a warp slot, the emission value is the warp strength instead.
+            float emission = (WarpSlot(material) != 0) ? 0.0 : material.mEmission;
             if (/*unlit ||*/ hasBakedLighting)
             {
                 emission = max(emission, 1.0);

@@ -39,7 +39,15 @@ void PrepareUiRendering();
 
 bool IsCpuSkinningRequired(SkeletalMesh3D* component);
 
-void BindMaterial(MaterialLite* material, bool useVertexColor, bool useBakedLighting);
+// hasNormals: the draw's vertices carry normals. Without them a UV_MAP_ENVIRONMENT slot uses UV 0.
+void BindMaterial(MaterialLite* material, bool useVertexColor, bool useBakedLighting, bool hasNormals = true);
+// After BindMaterial, with the draw's normal matrix (as given to GX_LoadNrmMtxImm): loads the
+// sphere-map matrix (GX_TEXMTX2) when the bound material has a UV_MAP_ENVIRONMENT slot.
+void LoadEnvTexMtx(const Mtx normalMtx);
+// Turns off indirect texturing (a TevMode::Warp material's) if any is on: GX_SetTevDirect on the
+// stages that used it and GX_SetNumIndStages(0). BindMaterial, the UI pass and Octave's own TEV
+// setups call it; code that sets up its own TEV stages during the 3D pass must call it too.
+void GxResetIndirect();
 void BindStaticMesh(StaticMesh* staticMesh, uint32_t* instanceColors);
 void BindSkeletalMesh(SkeletalMesh* skeletalMesh);
 

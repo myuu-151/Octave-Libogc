@@ -24,6 +24,30 @@
 #define MAX_BONES 128
 #define MAX_UV_MAPS 2
 
+// A MaterialLite texture slot whose UV Map is this takes its coordinates from the surface's
+// view-space normal instead of a UV channel (sphere map / matcap):
+//   u = n_view.x * 0.5 + 0.5,  v = -n_view.y * 0.5 + 0.5
+// View space is the camera's (+X right, +Y up, +Z towards the viewer). v = 0 is the top row of
+// the image, so a matcap rendered of a sphere seen from the front maps as it looks: the top of
+// the picture lights up-facing surfaces, its right side right-facing ones, and its middle the
+// surfaces facing the camera. The slot's UV offset/scale do not apply. Keep in step with
+// UV_MAP_ENVIRONMENT in Engine/Shaders/GLSL/src/Common.glsl.
+#define UV_MAP_ENVIRONMENT 2
+
+// Warp (indirect texture) slots: a MaterialLite texture slot whose TEV mode is TevMode::Warp is
+// not drawn. Its texture is a tileable offset map, sampled at the slot's own UV map (with that UV
+// set's offset/scale, so it can scroll), and it shifts the coordinates of every other slot:
+//   uv' = uv + (byte(G) - 128, byte(B) - 128) / 256 * strength
+// Green moves U, blue moves V; 128 is no offset. Red and alpha are ignored (the GameCube's
+// indirect unit reads only a texture's A, B and G, and CMPR has no usable alpha). The offset is
+// in the warped slot's own coordinates (1.0 = one repeat of its texture), applied after its UV
+// offset/scale. strength is the material's Emission value, which no rasterizer uses (it only
+// feeds the light baker, which ignores it on a warp material). strength <= 0 turns the warp off.
+// Only slots 1..3 can be warp slots (slot 0 is always the base texture), and only the first one
+// counts; a later one is treated as Pass. Keep in step with TEV_MODE_WARP in
+// Engine/Shaders/GLSL/src/Common.glsl. The 3DS ignores warp slots.
+#define MATERIAL_LITE_WARP_MIN_SLOT 1
+
 #define DEFAULT_AMBIENT_LIGHT_COLOR glm::vec4(0.1f, 0.1f, 0.1f, 1.0f)
 #define DEFAULT_SHADOW_COLOR glm::vec4(0.0f, 0.0f, 0.0f, 0.8f)
 

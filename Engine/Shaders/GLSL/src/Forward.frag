@@ -78,15 +78,35 @@ void main()
 {
     vec2 texCoord0 = (inTexcoord0 + material.mUvOffset0) * material.mUvScale0;
     vec2 texCoord1 = (inTexcoord1 + material.mUvOffset1) * material.mUvScale1;
+    vec2 texCoordEnv = EnvironmentUv(inNormal, global.mViewToWorld);
+
+    // A warp slot offsets every other slot's coordinates (it is not drawn itself: its TEV mode is
+    // above TEV_MODE_PASS, so BlendTextureEnv skips it).
+    uint warpSlot = WarpSlot(material);
+    if (warpSlot != 0)
+    {
+        vec2 warpUv = WarpSlotUv(material, warpSlot, texCoord0, texCoord1, texCoordEnv);
+        vec2 warp;
+        if (warpSlot == 1)
+            warp = WarpOffset(sampler1, warpUv, material.mEmission);
+        else if (warpSlot == 2)
+            warp = WarpOffset(sampler2, warpUv, material.mEmission);
+        else
+            warp = WarpOffset(sampler3, warpUv, material.mEmission);
+
+        texCoord0 += warp;
+        texCoord1 += warp;
+        texCoordEnv += warp;
+    }
 
     uint shadingModel = material.mShadingModel;
 
     vec4 diffuse = vec4(1,1,1,1);
 
-    diffuse = BlendTexture(material, diffuse, 0, sampler0, texCoord0, texCoord1, inColor.r, material.mTevModes[0], material.mVertexColorMode);
-    diffuse = BlendTexture(material, diffuse, 1, sampler1, texCoord0, texCoord1, inColor.g, material.mTevModes[1], material.mVertexColorMode);
-    diffuse = BlendTexture(material, diffuse, 2, sampler2, texCoord0, texCoord1, inColor.b, material.mTevModes[2], material.mVertexColorMode);
-    diffuse = BlendTexture(material, diffuse, 3, sampler3, texCoord0, texCoord1, 0.0, material.mTevModes[3], material.mVertexColorMode);
+    diffuse = BlendTextureEnv(material, diffuse, 0, sampler0, texCoord0, texCoord1, texCoordEnv, inColor.r, material.mTevModes[0], material.mVertexColorMode);
+    diffuse = BlendTextureEnv(material, diffuse, 1, sampler1, texCoord0, texCoord1, texCoordEnv, inColor.g, material.mTevModes[1], material.mVertexColorMode);
+    diffuse = BlendTextureEnv(material, diffuse, 2, sampler2, texCoord0, texCoord1, texCoordEnv, inColor.b, material.mTevModes[2], material.mVertexColorMode);
+    diffuse = BlendTextureEnv(material, diffuse, 3, sampler3, texCoord0, texCoord1, texCoordEnv, 0.0, material.mTevModes[3], material.mVertexColorMode);
 
     diffuse *= material.mColor;
 

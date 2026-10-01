@@ -1018,7 +1018,7 @@ void GFX_DrawStaticMeshComp(StaticMesh3D* staticMeshComp, StaticMesh* meshOverri
             OCT_ASSERT(material != nullptr);
         }
 
-        BindMaterial(material, hasColor, hasBakedLighting);
+        BindMaterial(material, hasColor, hasBakedLighting, !meshResource->mCompact);
 
         Mtx model;
         Mtx view;
@@ -1037,6 +1037,7 @@ void GFX_DrawStaticMeshComp(StaticMesh3D* staticMeshComp, StaticMesh* meshOverri
         guMtxInverse(modelView, modelViewInv);
         guMtxTranspose(modelViewInv, modelView);
         GX_LoadNrmMtxImm(modelView, GX_PNMTX0);
+        LoadEnvTexMtx(modelView);
 
         SetupLightMask(material->GetShadingModel(), staticMeshComp->GetLightingChannels(), hasBakedLighting);
         SetupLightingChannels();
@@ -1150,6 +1151,10 @@ void GFX_DrawSkeletalMeshComp(SkeletalMesh3D* skeletalMeshComp)
         Mtx normalMtx;
         guMtxInverse(modelView, modelViewInv);
         guMtxTranspose(modelViewInv, normalMtx);
+
+        // GPU skinning: the texgen reads the bind-pose normal, so a sphere map follows the
+        // component's rotation but not its bones'.
+        LoadEnvTexMtx(normalMtx);
 
         if (cpuSkinned)
         {
@@ -1276,6 +1281,8 @@ void GFX_DrawShadowMeshComp(ShadowMesh3D* shadowMeshComp)
                                             uint8_t(shadowColor.b * 255.0f),
                                             uint8_t(shadowColor.a * 255.f) });
 
+        // No texcoords here, so no indirect stage may be left reading one (a warp material's).
+        GxResetIndirect();
         GX_SetNumTexGens(0);
         GX_SetTevOrder(GX_TEVSTAGE0, GX_TEXCOORDNULL, GX_TEXMAP_NULL, GX_COLOR0A0);
         GX_SetTevOp(GX_TEVSTAGE0, GX_PASSCLR);
@@ -1407,6 +1414,7 @@ void GFX_DrawTextMeshComp(TextMesh3D* textMeshComp)
     guMtxInverse(modelView, modelViewInv);
     guMtxTranspose(modelViewInv, modelView);
     GX_LoadNrmMtxImm(modelView, GX_PNMTX0);
+    LoadEnvTexMtx(modelView);
 
     SetupLightMask(material->GetShadingModel(), textMeshComp->GetLightingChannels(), false);
     SetupLightingChannels();
@@ -1479,7 +1487,7 @@ void GFX_DrawParticleComp(Particle3D* particleComp)
             OCT_ASSERT(material != nullptr);
         }
 
-        BindMaterial(material, true, false);
+        BindMaterial(material, true, false, false);     // (particle vertices have no normals)
 
         Mtx model;
         Mtx view;

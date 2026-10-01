@@ -47,7 +47,7 @@ ThreadFuncRet MaterialPipelineCache::BuildThreadFunc(void* arg)
             static_assert(uint32_t(ShadingModel::Count) <= 8, "Need to update pipeline id!");
             static_assert(uint32_t(BlendMode::Count) <= 8, "Need to update pipeline id!");
             static_assert(uint32_t(VertexColorMode::Count) <= 8, "Need to update pipeline id!");
-            static_assert(uint32_t(TevMode::Count) <= 8, "Need to update pipeline id!");
+            static_assert(uint32_t(TevMode::Pass) < 8, "Need to update pipeline id!");   // (Warp materials never get here)
             static_assert(uint32_t(CullMode::Count) <= 4, "Need to update pipeline id!");
 
             // Reverse the pipeline id to find specialization values
@@ -247,10 +247,18 @@ Pipeline* MaterialPipelineCache::GetPipeline(Material* material, VertexType vert
 
     MaterialLite* matLite = (MaterialLite*)material;
 
+    // A tev mode takes 3 bits of the id, so TevMode::Warp (8) does not fit, and ForwardSpec.frag
+    // does not warp. Warp materials draw with the general Forward pipeline.
+    for (uint32_t i = 0; i < MATERIAL_LITE_MAX_TEXTURES; ++i)
+    {
+        if (matLite->GetTevMode(i) == TevMode::Warp)
+            return nullptr;
+    }
+
     static_assert(uint32_t(ShadingModel::Count) <= 8, "Need to update pipeline id!");
     static_assert(uint32_t(BlendMode::Count) <= 8, "Need to update pipeline id!");
     static_assert(uint32_t(VertexColorMode::Count) <= 8, "Need to update pipeline id!");
-    static_assert(uint32_t(TevMode::Count) <= 8, "Need to update pipeline id!");
+    static_assert(uint32_t(TevMode::Pass) < 8, "Need to update pipeline id!");   // (Warp materials never get here)
     static_assert(uint32_t(CullMode::Count) <= 4, "Need to update pipeline id!");
 
     // Constant values

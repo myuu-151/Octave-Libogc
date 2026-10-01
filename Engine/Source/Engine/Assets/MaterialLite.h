@@ -128,6 +128,13 @@ public:
     TevMode GetTevMode(uint32_t textureSlot);
     void SetTevMode(uint32_t textureSlot, TevMode mode);
 
+    // The texture slot that warps the others (TevMode::Warp, see Constants.h), or -1 when there
+    // is none or its strength is not above 0. A later Warp slot is ignored (treated as Pass).
+    int32_t GetWarpSlot();
+    // The warp strength shares the Emission value (see MATERIAL_LITE_WARP_MIN_SLOT in Constants.h).
+    float GetWarpStrength() const { return GetEmission(); }
+    void SetWarpStrength(float strength) { SetEmission(strength); }
+
     static bool HandlePropChange(Datum* datum, uint32_t index, const void* newValue);
 
 protected:

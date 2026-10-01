@@ -96,6 +96,9 @@ void BindTevMode()
     lua_pushinteger(L, (int)TevMode::Pass);
     lua_setfield(L, tableIdx, "Pass");
 
+    lua_pushinteger(L, (int)TevMode::Warp);
+    lua_setfield(L, tableIdx, "Warp");
+
     lua_pushinteger(L, (int)TevMode::Count);
     lua_setfield(L, tableIdx, "Count");
 

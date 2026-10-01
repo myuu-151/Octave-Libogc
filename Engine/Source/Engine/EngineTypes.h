@@ -113,6 +113,12 @@ enum class TevMode : uint32_t
     Interpolate,
     Pass,
 
+    // Not a colour stage: this slot's texture is an indirect (warp) map that offsets the
+    // coordinates of the material's other slots. See MaterialLite::GetWarpSlot() and
+    // MATERIAL_LITE_WARP_* in Constants.h. Appended so that values 0..7 in .oct files keep
+    // their meaning.
+    Warp,
+
     Count
 };
 

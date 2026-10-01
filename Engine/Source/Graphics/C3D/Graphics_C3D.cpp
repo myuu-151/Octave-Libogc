@@ -46,6 +46,14 @@
 
 #define VRAM_TEXTURES 1
 
+// The PICA shaders pick UV 0 or UV 1 per slot; sphere mapping (UV_MAP_ENVIRONMENT) is not done
+// on the 3DS, so such a slot uses UV 0.
+static float C3dUvMap(MaterialLite* material, uint32_t slot)
+{
+    uint32_t uvMap = material->GetUvMap(slot);
+    return (uvMap == UV_MAP_ENVIRONMENT) ? 0.0f : float(uvMap);
+}
+
 #define RGBA8_SIZE 4
 
 C3dContext gC3dContext;
@@ -789,7 +797,7 @@ void GFX_DrawStaticMeshComp(StaticMesh3D* staticMeshComp, StaticMesh* meshOverri
         UploadUvOffsetScale(gC3dContext.mStaticMeshLocs.mUvOffsetScale0, material, 0);
         UploadUvOffsetScale(gC3dContext.mStaticMeshLocs.mUvOffsetScale1, material, 1);
         
-        C3D_FVUnifSet(GPU_VERTEX_SHADER, gC3dContext.mStaticMeshLocs.mUvMaps, material->GetUvMap(0), material->GetUvMap(1), material->GetUvMap(2), 0);
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, gC3dContext.mStaticMeshLocs.mUvMaps, C3dUvMap(material, 0), C3dUvMap(material, 1), C3dUvMap(material, 2), 0);
 
         float colorScale = gC3dContext.mColorScale;
         if (material->GetVertexColorMode() == VertexColorMode::TextureBlend)
@@ -960,7 +968,7 @@ void GFX_DrawSkeletalMeshComp(SkeletalMesh3D* skeletalMeshComp)
 
         UploadUvOffsetScale(uvOffsetScaleLoc0, material, 0);
         UploadUvOffsetScale(uvOffsetScaleLoc1, material, 1);
-        C3D_FVUnifSet(GPU_VERTEX_SHADER, uvMapsLoc, material->GetUvMap(0), material->GetUvMap(1), material->GetUvMap(2), 0);
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, uvMapsLoc, C3dUvMap(material, 0), C3dUvMap(material, 1), C3dUvMap(material, 2), 0);
 
         // Handle color scale
         if (cpuSkinned)
@@ -1190,7 +1198,7 @@ void GFX_DrawTextMeshComp(TextMesh3D* textMeshComp)
     UploadUvOffsetScale(gC3dContext.mStaticMeshLocs.mUvOffsetScale0, material, 0);
     UploadUvOffsetScale(gC3dContext.mStaticMeshLocs.mUvOffsetScale1, material, 1);
 
-    C3D_FVUnifSet(GPU_VERTEX_SHADER, gC3dContext.mStaticMeshLocs.mUvMaps, material->GetUvMap(0), material->GetUvMap(1), material->GetUvMap(2), 0);
+    C3D_FVUnifSet(GPU_VERTEX_SHADER, gC3dContext.mStaticMeshLocs.mUvMaps, C3dUvMap(material, 0), C3dUvMap(material, 1), C3dUvMap(material, 2), 0);
     C3D_FVUnifSet(GPU_VERTEX_SHADER, gC3dContext.mStaticMeshLocs.mColorMult, 1.0f, 1.0f, 1.0f, 1.0f);
 
     // Draw

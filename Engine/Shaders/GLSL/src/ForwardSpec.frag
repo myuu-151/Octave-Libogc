@@ -97,6 +97,7 @@ void main()
 {
     vec2 texCoord0 = (inTexcoord0 + material.mUvOffset0) * material.mUvScale0;
     vec2 texCoord1 = kHasUv1 ? ((inTexcoord1 + material.mUvOffset1) * material.mUvScale1) : inTexcoord0;
+    vec2 texCoordEnv = EnvironmentUv(inNormal, global.mViewToWorld);
 
     uint shadingModel = kShadingModel;
 
@@ -104,16 +105,16 @@ void main()
     vec4 diffuse = vec4(1,1,1,1);
 
     if (kNumTextures >= 1)
-        diffuse = BlendTexture(material, diffuse, 0, sampler0, texCoord0, texCoord1, vertColor.r, kTev0, kVertexColorMode);
+        diffuse = BlendTextureEnv(material, diffuse, 0, sampler0, texCoord0, texCoord1, texCoordEnv, vertColor.r, kTev0, kVertexColorMode);
 
     if (kNumTextures >= 2)
-        diffuse = BlendTexture(material, diffuse, 1, sampler1, texCoord0, texCoord1, vertColor.g, kTev1, kVertexColorMode);
+        diffuse = BlendTextureEnv(material, diffuse, 1, sampler1, texCoord0, texCoord1, texCoordEnv, vertColor.g, kTev1, kVertexColorMode);
 
     if (kNumTextures >= 3)
-        diffuse = BlendTexture(material, diffuse, 2, sampler2, texCoord0, texCoord1, vertColor.b, kTev2, kVertexColorMode);
+        diffuse = BlendTextureEnv(material, diffuse, 2, sampler2, texCoord0, texCoord1, texCoordEnv, vertColor.b, kTev2, kVertexColorMode);
 
     if (kNumTextures >= 4)
-        diffuse = BlendTexture(material, diffuse, 3, sampler3, texCoord0, texCoord1, 0.0, kTev3, kVertexColorMode);
+        diffuse = BlendTextureEnv(material, diffuse, 3, sampler3, texCoord0, texCoord1, texCoordEnv, 0.0, kTev3, kVertexColorMode);
 
     diffuse *= material.mColor;
 

@@ -74,6 +74,13 @@ struct GxContext
     float mColorScale = 1.0f;
     float mInvColorScale = 1.0f;
     uint8_t mColorScaleEnum = GX_CS_SCALE_1;
+
+    // The material BindMaterial last set has a UV_MAP_ENVIRONMENT slot (LoadEnvTexMtx).
+    bool mEnvMapBound = false;
+
+    // TEV stages BindMaterial left reading the indirect (warp) stage, one bit per stage. Non-zero
+    // also means GX_SetNumIndStages(1) is in effect. GxResetIndirect() turns it all off.
+    uint32_t mIndirectTevMask = 0;
 };
 
 #endif

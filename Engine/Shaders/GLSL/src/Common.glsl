@@ -26,6 +26,13 @@
 #define TEV_MODE_SUBTRACT 5
 #define TEV_MODE_INTERPOLATE 6
 #define TEV_MODE_PASS 7
+// Not a colour stage: the slot's texture offsets the other slots' coordinates (indirect warp).
+// Matches TevMode::Warp; see MATERIAL_LITE_WARP_MIN_SLOT in Constants.h.
+#define TEV_MODE_WARP 8
+
+// A texture slot's UV map: 0 and 1 are the mesh's UV channels; UV_MAP_ENVIRONMENT takes the
+// coordinates from the view-space normal (sphere map / matcap). Matches Constants.h.
+#define UV_MAP_ENVIRONMENT 2
 
 #define LIGHT_TYPE_POINT 0
 #define LIGHT_TYPE_SPOT 1
@@ -225,10 +232,20 @@ const mat4 SHADOW_BIAS_MAT = mat4(
 	0.0, 0.0, 1.0, 0.0,
 	0.5, 0.5, 0.0, 1.0 );
 
-vec4 BlendTexture(MaterialUniforms material, vec4 prevColor, uint texIdx, sampler2D texSampler, vec2 uv0, vec2 uv1, float vertexIntensity, uint tevMode, uint vertexColorMode)
+// Sphere-map coordinates from a world-space normal: u = n_view.x * 0.5 + 0.5,
+// v = -n_view.y * 0.5 + 0.5 (v = 0 is the image's top row, so up-facing normals read the top of
+// the matcap). viewToWorld is rigid, so its 3x3 transposed takes world to view: n * mat3(M).
+vec2 EnvironmentUv(vec3 worldNormal, mat4 viewToWorld)
+{
+    vec3 n = normalize(worldNormal * mat3(viewToWorld));
+    return vec2(n.x * 0.5 + 0.5, -n.y * 0.5 + 0.5);
+}
+
+vec4 BlendTextureEnv(MaterialUniforms material, vec4 prevColor, uint texIdx, sampler2D texSampler, vec2 uv0, vec2 uv1, vec2 uvEnv, float vertexIntensity, uint tevMode, uint vertexColorMode)
 {
     vec4 outColor = prevColor;
-    vec2 uv = (material.mUvMaps[texIdx]) == 0 ? uv0 : uv1;
+    uint uvMap = material.mUvMaps[texIdx];
+    vec2 uv = (uvMap == UV_MAP_ENVIRONMENT) ? uvEnv : ((uvMap == 0) ? uv0 : uv1);
 
     if (tevMode < TEV_MODE_PASS)
     {
@@ -253,6 +270,43 @@ vec4 BlendTexture(MaterialUniforms material, vec4 prevColor, uint texIdx, sample
     }
 
     return outColor;
+}
+
+// The texture slot (1..3) whose TEV mode is TEV_MODE_WARP, or 0 for none. The warp strength is
+// the material's emission, and a strength of 0 or less turns the warp off.
+uint WarpSlot(MaterialUniforms material)
+{
+    if (!(material.mEmission > 0.0))
+        return 0;
+
+    for (uint i = 1; i < MAX_TEXTURES; ++i)
+    {
+        if (material.mTevModes[i] == TEV_MODE_WARP)
+            return i;
+    }
+
+    return 0;
+}
+
+// A warp slot's coordinates: its UV map, with that UV set's offset/scale (as BlendTextureEnv).
+vec2 WarpSlotUv(MaterialUniforms material, uint slot, vec2 uv0, vec2 uv1, vec2 uvEnv)
+{
+    uint uvMap = material.mUvMaps[slot];
+    return (uvMap == UV_MAP_ENVIRONMENT) ? uvEnv : ((uvMap == 0) ? uv0 : uv1);
+}
+
+// The offset a warp map gives: green moves U, blue moves V, byte 128 is none, and each step is
+// strength / 256 -- exactly as the GameCube's indirect unit does it (bias -128, 8-bit).
+vec2 WarpOffset(sampler2D warpSampler, vec2 uv, float strength)
+{
+    vec2 bytes = floor(texture(warpSampler, uv).gb * 255.0 + 0.5);
+    return (bytes - 128.0) * (strength / 256.0);
+}
+
+// Callers with no normal to hand (the path tracer) treat an environment slot as UV 0.
+vec4 BlendTexture(MaterialUniforms material, vec4 prevColor, uint texIdx, sampler2D texSampler, vec2 uv0, vec2 uv1, float vertexIntensity, uint tevMode, uint vertexColorMode)
+{
+    return BlendTextureEnv(material, prevColor, texIdx, texSampler, uv0, uv1, uv0, vertexIntensity, tevMode, vertexColorMode);
 }
 
 float CalcLightIntensity(vec3 N, vec3 L, float wrap)

@@ -32,13 +32,16 @@
 #include <string.h>
 #include <sys/reent.h>
 
+// WEAK: they exist only in a game linked with --wrap=malloc,... (the cache in use). A game linked
+// without (CCGC) may still pull this file in through BigBlockCacheReserve (System.ReserveBigBlocks
+// in Lua); there they are null, and the reserve does nothing.
 extern "C"
 {
-void* __real_malloc(size_t size);
-void __real_free(void* ptr);
-void* __real_realloc(void* ptr, size_t size);
-void* __real_calloc(size_t count, size_t size);
-void* __real_memalign(size_t align, size_t size);
+void* __real_malloc(size_t size) __attribute__((weak));
+void __real_free(void* ptr) __attribute__((weak));
+void* __real_realloc(void* ptr, size_t size) __attribute__((weak));
+void* __real_calloc(size_t count, size_t size) __attribute__((weak));
+void* __real_memalign(size_t align, size_t size) __attribute__((weak));
 
 void __malloc_lock(struct _reent* r);
 void __malloc_unlock(struct _reent* r);
@@ -216,6 +219,10 @@ void BigBlockCachePin(size_t size, uint32_t count)
 // into a session, found none. 32-byte aligned, so memalign(32, ...) can have them too.
 void BigBlockCacheReserve(size_t size, uint32_t count)
 {
+    if (__real_memalign == nullptr)
+    {
+        return;                         // not linked with --wrap: no cache to reserve for
+    }
     BigBlockCachePin(size, count);
     for (uint32_t i = 0; i < count; ++i)
     {

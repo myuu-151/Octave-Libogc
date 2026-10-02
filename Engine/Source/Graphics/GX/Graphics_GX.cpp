@@ -1012,7 +1012,20 @@ void GFX_CreateStaticMeshResource(StaticMesh* staticMesh, bool hasColor, uint32_
     {
         resource->mDisplayList = CreateMeshDisplayList(staticMesh, false, resource->mDisplayListSize);
         // the display list indexes the vertices the same way either form: quantized after it
-        if (GFX_GetQuantizedMeshes() && resource->mDisplayList != nullptr && !staticMesh->IsTriangleCollisionMeshEnabled())
+        if (staticMesh->HasQuantData())
+        {
+            // read quantized (cooked so, StaticMesh::LoadStream): the loader's array is drawn from
+            if (resource->mDisplayList != nullptr)
+            {
+                resource->mPosFrac = staticMesh->GetQuantPosFrac();
+                resource->mUvFrac = staticMesh->GetQuantUvFrac();
+                resource->mQuantVertices = staticMesh->TakeQuantData();
+                DCFlushRange(resource->mQuantVertices, numVertices * kQuantStride);
+                GX_InvVtxCache();
+                resource->mQuantized = true;
+            }
+        }
+        else if (GFX_GetQuantizedMeshes() && resource->mDisplayList != nullptr && !staticMesh->IsTriangleCollisionMeshEnabled())
         {
             QuantizeStaticMesh(staticMesh, resource);
         }

@@ -282,6 +282,10 @@ struct EngineConfig
     bool mLogToFile = false;
     bool mScriptHotReload = false;
     bool mShowSplash = true;   // "Powered by Octave" boot splash (packaged games)
+    // Packaging for GameCube/Wii: lit, textured static meshes written in the GPU's compressed
+    // vertex formats (StaticMesh::SaveStream) -- under half the bytes to read, and read straight
+    // into the form they are drawn from. Opt in per project (Config.ini CookQuantizedMeshes=1).
+    bool mCookQuantizedMeshes = false;
 
     int32_t mLqMaxTextureSize = 0;
     // Steps every console texture down by (factor - 1) halvings at cook time: 2 takes 512 to 256

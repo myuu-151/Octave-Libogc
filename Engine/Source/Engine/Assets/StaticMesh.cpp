@@ -68,9 +68,33 @@ StaticMesh::StaticMesh() :
     mType = StaticMesh::GetStaticType();
 }
 
+#include <math.h>
+#include <string.h>
+
+// QUANTIZED ON DISC (CookQuantizedMeshes): the UV map count's top bit says so, and a vertex is
+// kQuantDiscStride bytes (int16 position, int8 normal, a pad byte, int16 texture coordinate).
+static const uint32_t kQuantizedOnDiscFlag = 0x80000000u;
+static const uint32_t kQuantDiscStride = 14;
+
+static int16_t QuantS16(float f)
+{
+    f = roundf(f);
+    return int16_t(f > 32767.0f ? 32767.0f : (f < -32768.0f ? -32768.0f : f));
+}
+
+static int8_t QuantS8(float f)
+{
+    f = roundf(f);
+    return int8_t(f > 127.0f ? 127.0f : (f < -128.0f ? -128.0f : f));
+}
+
 StaticMesh::~StaticMesh()
 {
-
+    if (mQuantData != nullptr)
+    {
+        free(mQuantData);
+        mQuantData = nullptr;
+    }
 }
 
 void StaticMesh::CreateRaw(
@@ -128,7 +152,11 @@ void StaticMesh::LoadStream(Stream& stream, Platform platform)
                  "limit will wrap and render as stray geometry. Split the mesh.",
                  GetName().c_str(), mNumVertices, (uint32_t)MAX_MESH_VERTEX_COUNT);
     }
-    mNumUvMaps = stream.ReadUint32();
+    // QUANTIZED ON DISC (StaticMesh::SaveStream, CookQuantizedMeshes): flagged in the UV map
+    // count's top bit; the vertices follow as 14-byte quantized ones and the indices as 16-bit
+    const uint32_t uvMapsWord = stream.ReadUint32();
+    const bool quant = (uvMapsWord & kQuantizedOnDiscFlag) != 0;
+    mNumUvMaps = uvMapsWord & ~kQuantizedOnDiscFlag;
 
     stream.ReadAsset(mMaterial);
 
@@ -136,6 +164,12 @@ void StaticMesh::LoadStream(Stream& stream, Platform platform)
     mHasVertexColor = stream.ReadBool();
 
     mCompactVertices = false;
+    mQuantOnDisc = quant;
+    if (quant)
+    {
+        mQuantPosFrac = stream.ReadUint8();
+        mQuantUvFrac = stream.ReadUint8();
+    }
 #if API_GX && !EDITOR
     // READ STRAIGHT INTO THE COMPACT FORM when the mesh will be drawn compact (GxUtils.cpp,
     // BindStaticMesh): position and colour, 16 bytes a vertex instead of 44. Made compact after
@@ -143,7 +177,7 @@ void StaticMesh::LoadStream(Stream& stream, Platform platform)
     // a GameCube some stages in there was no such block. The material has to be known now to
     // decide; it is when it is already loaded (the stage's is: the rings use it). If it is not,
     // the mesh loads the ordinary way and may still be made compact when it is created.
-    if (mHasVertexColor && !mGenerateTriangleCollisionMesh && GFX_GetCompactUnlitMeshes() &&
+    if (!quant && mHasVertexColor && !mGenerateTriangleCollisionMesh && GFX_GetCompactUnlitMeshes() &&
         GFX_MaterialAllowsCompact(GetMaterial()))
     {
         struct CompactVertex { float mX, mY, mZ; uint32_t mColor; };
@@ -176,10 +210,23 @@ void StaticMesh::LoadStream(Stream& stream, Platform platform)
             vertices[i] = { position.x, position.y, position.z, color };
         }
     }
+    else if (quant)
+    {
+        // straight into the form GX draws from (BindStaticMesh): no float array at all
+        mQuantData = memalign(32, (mNumVertices > 0 ? mNumVertices : 1) * kQuantDiscStride);
+        if (mQuantData == nullptr)
+        {
+            LogError("Mesh %s: out of memory for %u vertices", GetName().c_str(), mNumVertices);
+            throw std::bad_alloc();
+        }
+    }
     else
 #endif
     {
-        ResizeVertexArray(mNumVertices);
+        if (!quant)
+        {
+            ResizeVertexArray(mNumVertices);
+        }
     }
 
 #if EDITOR
@@ -189,6 +236,55 @@ void StaticMesh::LoadStream(Stream& stream, Platform platform)
     if (mCompactVertices)
     {
         // read above
+    }
+    else if (quant)
+    {
+        // int16 x, y, z; int8 normal x, y, z; a pad byte; int16 s, t. Read a value at a time into
+        // this machine's order (GX reads the array in place); elsewhere, expanded back to floats.
+#if API_GX && !EDITOR
+        uint8_t* q = (uint8_t*)mQuantData;
+        for (uint32_t i = 0; i < mNumVertices; ++i)
+        {
+            int16_t pos[3];
+            pos[0] = stream.ReadInt16();
+            pos[1] = stream.ReadInt16();
+            pos[2] = stream.ReadInt16();
+            int8_t nrm[3];
+            nrm[0] = stream.ReadInt8();
+            nrm[1] = stream.ReadInt8();
+            nrm[2] = stream.ReadInt8();
+            stream.ReadUint8();
+            int16_t uv[2];
+            uv[0] = stream.ReadInt16();
+            uv[1] = stream.ReadInt16();
+            uint8_t* o = q + i * kQuantDiscStride;
+            memcpy(o, pos, 6);
+            memcpy(o + 6, nrm, 3);
+            o[9] = 0;
+            memcpy(o + 10, uv, 4);
+        }
+#else
+        ResizeVertexArray(mNumVertices);
+        Vertex* vertices = GetVertices();
+        const float posScale = 1.0f / float(1 << mQuantPosFrac);
+        const float uvScale = 1.0f / float(1 << mQuantUvFrac);
+        for (uint32_t i = 0; i < mNumVertices; ++i)
+        {
+            float x = stream.ReadInt16() * posScale;
+            float y = stream.ReadInt16() * posScale;
+            float z = stream.ReadInt16() * posScale;
+            float nx = stream.ReadInt8() / 64.0f;
+            float ny = stream.ReadInt8() / 64.0f;
+            float nz = stream.ReadInt8() / 64.0f;
+            stream.ReadUint8();
+            float u = stream.ReadInt16() * uvScale;
+            float v = stream.ReadInt16() * uvScale;
+            vertices[i].mPosition = glm::vec3(x, y, z);
+            vertices[i].mNormal = glm::vec3(nx, ny, nz);
+            vertices[i].mTexcoord0 = glm::vec2(u, v);
+            vertices[i].mTexcoord1 = glm::vec2(u, v);
+        }
+#endif
     }
     else if (mHasVertexColor)
     {
@@ -244,6 +340,16 @@ void StaticMesh::LoadStream(Stream& stream, Platform platform)
     // Nothing is dropped on a 32-bit-index platform, where the limit is UINT32_MAX.
     ResizeIndexArray(mNumIndices);
 
+    if (quant)
+    {
+        // 16-bit on disc: cooked only for meshes whose indices fit
+        for (uint32_t k = 0; k < mNumIndices; ++k)
+        {
+            mIndices[k] = (IndexType)stream.ReadUint16();
+        }
+    }
+    else
+    {
     uint32_t dstIndex = 0;
     uint32_t droppedTriangles = 0;
     uint32_t i = 0;
@@ -285,6 +391,7 @@ void StaticMesh::LoadStream(Stream& stream, Platform platform)
     }
 
     mNumIndices = dstIndex;
+    }
 
     // Collision shapes
     bool compound = stream.ReadBool();
@@ -367,15 +474,49 @@ void StaticMesh::SaveStream(Stream& stream, Platform platform)
     Asset::SaveStream(stream, platform);
     
 #if EDITOR
+    // COOKED QUANTIZED for the consoles when the project asks (Config.ini CookQuantizedMeshes):
+    // a lit, textured mesh (no vertex colours, no triangle collision) whose extent fits 16 bits
+    // finely and whose second UV set is unused. See LoadStream.
+    int posFrac = 0, uvFrac = 0;
+    const bool quant = (platform == Platform::GameCube || platform == Platform::Wii) &&
+                       GetEngineConfig()->mCookQuantizedMeshes && !mHasVertexColor &&
+                       !mGenerateTriangleCollisionMesh && mNumVertices > 0 && mNumVertices <= 65535 &&
+                       QuantizeFracs(GetVertices(), mNumVertices, posFrac, uvFrac);
+
     stream.WriteUint32(mNumVertices);
     stream.WriteUint32(mNumIndices);
-    stream.WriteUint32(mNumUvMaps);
+    stream.WriteUint32(quant ? (mNumUvMaps | kQuantizedOnDiscFlag) : mNumUvMaps);
 
     stream.WriteAsset(mMaterial);
     stream.WriteBool(mGenerateTriangleCollisionMesh);
     stream.WriteBool(mHasVertexColor);
 
-    if (mHasVertexColor)
+    if (quant)
+    {
+        stream.WriteUint8(uint8_t(posFrac));
+        stream.WriteUint8(uint8_t(uvFrac));
+        const float posScale = float(1 << posFrac);
+        const float uvScale = float(1 << uvFrac);
+        Vertex* vertices = GetVertices();
+        for (uint32_t i = 0; i < mNumVertices; ++i)
+        {
+            const Vertex& x = vertices[i];
+            stream.WriteInt16(QuantS16(x.mPosition.x * posScale));
+            stream.WriteInt16(QuantS16(x.mPosition.y * posScale));
+            stream.WriteInt16(QuantS16(x.mPosition.z * posScale));
+            stream.WriteInt8(QuantS8(x.mNormal.x * 64.0f));
+            stream.WriteInt8(QuantS8(x.mNormal.y * 64.0f));
+            stream.WriteInt8(QuantS8(x.mNormal.z * 64.0f));
+            stream.WriteUint8(0);
+            stream.WriteInt16(QuantS16(x.mTexcoord0.x * uvScale));
+            stream.WriteInt16(QuantS16(x.mTexcoord0.y * uvScale));
+        }
+        for (uint32_t i = 0; i < mNumIndices; ++i)
+        {
+            stream.WriteUint16(uint16_t(mIndices[i]));
+        }
+    }
+    else if (mHasVertexColor)
     {
         VertexColor* vertices = GetColorVertices();
         for (uint32_t i = 0; i < mNumVertices; ++i)
@@ -401,9 +542,12 @@ void StaticMesh::SaveStream(Stream& stream, Platform platform)
         }
     }
 
-    for (uint32_t i = 0; i < mNumIndices; ++i)
+    if (!quant)
     {
-        stream.WriteUint32(mIndices[i]);
+        for (uint32_t i = 0; i < mNumIndices; ++i)
+        {
+            stream.WriteUint32(mIndices[i]);
+        }
     }
 
     // Collision shapes
@@ -510,7 +654,11 @@ void StaticMesh::Create()
     OCT_ASSERT(mNumVertices <= MAX_MESH_VERTEX_COUNT); // Vertex index must fit into IndexType width.
 
     // Before the GPU resource: on GX a compact mesh lets go of its vertex array just after.
-    ComputeBounds();
+    // (Read quantized there are no floats to measure: the bounds read with it stand.)
+    if (!mQuantOnDisc || mVertices != nullptr)
+    {
+        ComputeBounds();
+    }
 
     GFX_CreateStaticMeshResource(
         this,
@@ -848,6 +996,38 @@ bool StaticMesh::SetVertexData(const float* xyz, const uint32_t* rgba, uint32_t 
     mBounds.mCenter = (lo + hi) * 0.5f;
     mBounds.mRadius = glm::length(hi - lo) * 0.5f;
     return true;
+}
+
+bool StaticMesh::QuantizeFracs(const Vertex* v, uint32_t n, int& posFrac, int& uvFrac)
+{
+    if (v == nullptr || n == 0)
+    {
+        return false;
+    }
+    float posMax = 0.0f, uvMax = 0.0f;
+    for (uint32_t i = 0; i < n; ++i)
+    {
+        const Vertex& x = v[i];
+        for (uint32_t k = 0; k < 3; ++k)
+        {
+            posMax = fmaxf(posMax, fabsf(x.mPosition[k]));
+        }
+        uvMax = fmaxf(uvMax, fmaxf(fabsf(x.mTexcoord0.x), fabsf(x.mTexcoord0.y)));
+        const bool uv1Zero = (x.mTexcoord1.x == 0.0f && x.mTexcoord1.y == 0.0f);
+        const bool uv1Same = (x.mTexcoord1.x == x.mTexcoord0.x && x.mTexcoord1.y == x.mTexcoord0.y);
+        if (!uv1Zero && !uv1Same)
+        {
+            return false;                       // a second UV set of its own: kept as floats
+        }
+    }
+    // the most fraction bits that still fit the extent in 16 bits (a margin under 32767); fewer
+    // than 8 (more than ~125 units, or UVs past ~125) is too coarse: kept as floats
+    const float kFit = 32000.0f;
+    posFrac = 15;
+    while (posFrac > 0 && posMax * float(1 << posFrac) > kFit) --posFrac;
+    uvFrac = 15;
+    while (uvFrac > 0 && uvMax * float(1 << uvFrac) > kFit) --uvFrac;
+    return posFrac >= 8 && uvFrac >= 8;
 }
 
 void* StaticMesh::TakeVertexArray()

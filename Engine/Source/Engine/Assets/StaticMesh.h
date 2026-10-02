@@ -70,6 +70,15 @@ public:
     bool HasCompactVertices() const { return mCompactVertices; }
     // Hands the vertex array over (the compact renderer keeps it) and forgets it.
     void* TakeVertexArray();
+    // GX: the vertices were read already quantized (cooked so: SaveStream, CookQuantizedMeshes),
+    // 14 bytes each, with these fraction bits. The renderer takes the array.
+    bool HasQuantData() const { return mQuantData != nullptr; }
+    void* TakeQuantData() { void* q = mQuantData; mQuantData = nullptr; return q; }
+    uint8_t GetQuantPosFrac() const { return mQuantPosFrac; }
+    uint8_t GetQuantUvFrac() const { return mQuantUvFrac; }
+    // Fraction bits that keep a mesh's extent in 16 bits (false: too coarse, or a second UV set
+    // of its own, so not quantized). Shared by the cook and the GX renderer.
+    static bool QuantizeFracs(const Vertex* vertices, uint32_t numVertices, int& posFrac, int& uvFrac);
     glm::vec3 GetVertexPosition(uint32_t index);
 
     // Console only (GX), for a COMPACT mesh: take another mesh asset's vertex colours -- the same
@@ -135,6 +144,10 @@ private:
     bool mGenerateTriangleCollisionMesh;
     bool mHasVertexColor;
     bool mCompactVertices = false;
+    void* mQuantData = nullptr;         // see HasQuantData
+    uint8_t mQuantPosFrac = 0;
+    uint8_t mQuantUvFrac = 0;
+    bool mQuantOnDisc = false;          // read quantized: the bounds are the file's (no floats to measure)
 
     // StageColorsFrom: the colours read so far, whose asset, and where its vertices start
     std::vector<uint32_t> mStagedColors;

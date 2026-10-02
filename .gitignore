@@ -335,3 +335,6 @@ Engine/Assets/Scenes/Levels/SC_Demo_FirstPerson.oct
 # Local-only ISO streaming diagnostics (personal debug tool, do not commit)
 IsoLog_local.h
 octiso.log
+
+# The builder's chosen toolchain (Tools/builder.py)
+Tools/.toolchain.json

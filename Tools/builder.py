@@ -18,6 +18,7 @@ window of its own; the window shows each step's progress, and of the output only
 errors ("Show every line" for the rest). All of it is in builder.log at the root.
 """
 import io
+import json
 import os
 import queue
 import re
@@ -28,7 +29,7 @@ import threading
 import tkinter as tk
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from tkinter import ttk
+from tkinter import filedialog, ttk
 
 ROOT = Path(__file__).resolve().parents[1]
 LOG_FILE = ROOT / 'builder.log'
@@ -49,7 +50,8 @@ FULL_BUILD = {'ReleaseEditor': 711, 'Release': 526}
 
 
 def find_devkitpro():
-    for candidate in (os.environ.get('DEVKITPRO_WIN'), os.environ.get('DEVKITPRO'), r'C:\devkitPro'):
+    for candidate in (os.environ.get('DEVKITPRO_WIN'), os.environ.get('DEVKITPRO'), r'C:\devkitPro',
+                      r'C:\gekko-toolchain'):
         if not candidate:
             continue
         if candidate.startswith('/') and len(candidate) > 2 and candidate[2] == '/':
@@ -195,6 +197,57 @@ def gcn_to_compile():
     return stale, everything
 
 
+# --- the GameCube toolchain: devkitPro's install or gekko-toolchain, whichever is chosen ---------
+TOOLCHAIN_SETTING = Path(__file__).with_name('.toolchain.json')   # (not in git)
+
+
+def toolchain_path(candidate):
+    """A toolchain folder from a folder or a DEVKITPRO-style value (/c/devkitPro), or None."""
+    if not candidate:
+        return None
+    if candidate.startswith('/') and len(candidate) > 2 and candidate[2] == '/':
+        candidate = f'{candidate[1].upper()}:{candidate[2:]}'
+    elif candidate.startswith('/opt/devkitpro'):
+        candidate = r'C:\devkitPro'
+    path = Path(candidate)
+    return path if (path / 'devkitPPC' / 'bin' / 'powerpc-eabi-gcc.exe').exists() else None
+
+
+def toolchain_label(path):
+    """"gekko-toolchain r49.2  (C:\\gekko-toolchain)" or "devkitPro r49.2  (C:\\devkitPro)"."""
+    kind = 'gekko-toolchain' if (path / 'VERSIONS.txt').exists() and (path / 'Install.bat').exists() else 'devkitPro'
+    version = ''
+    try:
+        version = next(line.split()[1].split('-')[0] for line in (path / 'VERSIONS.txt').read_text().splitlines()
+                       if line.startswith('devkitPPC '))
+    except (OSError, StopIteration, IndexError):
+        # (Windows matches names regardless of case: devkitppc-rules would match a glob too)
+        db = path / 'msys2' / 'var' / 'lib' / 'pacman' / 'local'
+        found = sorted(m.group(1) for d in (db.iterdir() if db.is_dir() else ())
+                       for m in [re.match(r'devkitPPC-(r[0-9.]+)-', d.name)] if m)
+        if found:
+            version = found[-1]
+    return f'{kind} {version}'.strip() + f'  ({path})'
+
+
+def toolchain_settings():
+    try:
+        return json.loads(TOOLCHAIN_SETTING.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def find_toolchains():
+    """Every toolchain there is: DEVKITPRO's, C:\\devkitPro, C:\\gekko-toolchain, and folders chosen before."""
+    found = []
+    for candidate in (os.environ.get('DEVKITPRO_WIN'), os.environ.get('DEVKITPRO'), r'C:\devkitPro',
+                      r'C:\gekko-toolchain', *toolchain_settings().get('folders', [])):
+        path = toolchain_path(candidate)
+        if path and all(path.resolve() != other.resolve() for other in found):
+            found.append(path)
+    return found
+
+
 class Builder:
     PARTS = (('ffmpeg', 'ffmpeg and ffprobe (External/ffmpeg/bin), unzipped: packaging needs them'),
              ('shaders', 'The shaders (Engine/Shaders/GLSL/bin)'),
@@ -229,7 +282,7 @@ class Builder:
         checks = ttk.LabelFrame(root, text='What that needs')
         checks.pack(fill='x', **pad)
         self.rows = {}
-        for key, title in (('vs', 'Visual Studio (C++)'), ('vulkan', 'Vulkan SDK'), ('devkitpro', 'devkitPro (devkitPPC)'),
+        for key, title in (('vs', 'Visual Studio (C++)'), ('vulkan', 'Vulkan SDK'), ('devkitpro', 'GameCube toolchain'),
                            ('ffmpeg', 'ffmpeg')):
             row = ttk.Frame(checks)
             row.pack(fill='x', padx=6, pady=2)
@@ -238,6 +291,8 @@ class Builder:
             ttk.Label(row, text=title, width=24).pack(side='left')
             note = ttk.Label(row, foreground='#555')
             note.pack(side='left', fill='x', expand=True)
+            if key == 'devkitpro':
+                self.add_toolchain_switch(row)
             self.rows[key] = (mark, note)
 
         buttons = ttk.Frame(root)
@@ -259,11 +314,59 @@ class Builder:
         scroll.pack(side='right', fill='y')
         self.log.pack(side='left', fill='both', expand=True)
 
-        self.msbuild, self.vulkan, self.devkitpro = find_msbuild(), find_vulkan(), find_devkitpro()
+        self.msbuild, self.vulkan = find_msbuild(), find_vulkan()
         self.check()
         root.after(100, self.pump)
 
     # --- what the build needs -------------------------------------------------
+
+    # --- the toolchain switch ----------------------------------------------
+
+    def add_toolchain_switch(self, row):
+        """The devkitPro row's drop-down (every toolchain found) and Choose button (another folder)."""
+        ttk.Button(row, text='Choose...', command=self.choose_toolchain).pack(side='right')
+        self.toolchain_box = ttk.Combobox(row, state='readonly', width=44)
+        self.toolchain_box.pack(side='right', padx=4)
+        self.toolchain_box.bind('<<ComboboxSelected>>', lambda _e: self.pick_toolchain(self.toolchain_box.current()))
+        self.toolchains = []
+
+    def refresh_toolchains(self):
+        """The toolchains found, into the drop-down; self.devkitpro the one chosen (else the first)."""
+        self.toolchains = find_toolchains()
+        self.toolchain_box['values'] = [toolchain_label(p) for p in self.toolchains]
+        chosen = toolchain_settings().get('chosen')
+        index = next((i for i, p in enumerate(self.toolchains) if chosen and p.resolve() == Path(chosen).resolve()), 0)
+        self.devkitpro = self.toolchains[index] if self.toolchains else None
+        if self.toolchains:
+            self.toolchain_box.current(index)
+        else:
+            self.toolchain_box.set('')
+
+    def save_toolchain(self, path, add=False):
+        settings = toolchain_settings()
+        settings['chosen'] = str(path)
+        if add and str(path) not in settings.setdefault('folders', []):
+            settings['folders'].append(str(path))
+        try:
+            TOOLCHAIN_SETTING.write_text(json.dumps(settings))
+        except OSError:
+            pass
+
+    def pick_toolchain(self, index):
+        if 0 <= index < len(self.toolchains):
+            self.save_toolchain(self.toolchains[index])
+            self.check()
+
+    def choose_toolchain(self):
+        folder = filedialog.askdirectory(title='A GameCube toolchain: devkitPro or gekko-toolchain (the folder with devkitPPC in it)')
+        if not folder:
+            return
+        path = toolchain_path(folder)
+        if path is None:
+            self.set_row('devkitpro', False, f'no devkitPPC in {folder}')
+            return
+        self.save_toolchain(path, add=True)
+        self.check()
 
     def set_row(self, key, state, note):
         """state: True (there), False (missing and needed), None (missing, not needed now)."""
@@ -289,10 +392,11 @@ class Builder:
         else:
             self.set_row('vulkan', False if need_vulkan else None, 'install the Vulkan SDK (vulkan.lunarg.com)')
             ok = ok and not need_vulkan
+        self.refresh_toolchains()
         if self.devkitpro:
-            self.set_row('devkitpro', True, str(self.devkitpro))
+            self.set_row('devkitpro', True, '')
         else:
-            self.set_row('devkitpro', False if want['gcn'] else None, 'install devkitPro with devkitPPC (devkitpro.org)')
+            self.set_row('devkitpro', False if want['gcn'] else None, 'install devkitPro with devkitPPC (devkitpro.org), or gekko-toolchain (github.com/myuu-151/gekko-toolchain)')
             ok = ok and not want['gcn']
         if ffmpeg_there():
             self.set_row('ffmpeg', True, str(FFMPEG))

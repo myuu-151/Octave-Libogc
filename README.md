@@ -28,7 +28,8 @@ Instructions for building from source below.
 1. Download and Install:
    - Visual Studio Community 2022 (with C++ support)
    - Vulkan SDK version 1.3.275.0 (During install select "Shader Toolchain Debug Symbols - 64 bit" and deselect all other options)
-   - devkitPPC for GameCube/Wii development
+   - devkitPPC for GameCube/Wii development (or [gekko-toolchain](https://github.com/myuu-151/gekko-toolchain): devkitPro's GameCube toolchain in one zip;
+     the builder's **GameCube toolchain** switch picks between them)
    - devkitARM for 3DS development
    - Instructions for installing the devkitPro toolchains can be found in the devkitPro wiki [here](https://devkitpro.org/wiki/Getting_Started)
 2. For GameCube/Wii development, install the standard devkitPro libraries (libogc):

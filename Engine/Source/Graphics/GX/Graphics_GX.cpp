@@ -31,6 +31,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <malloc.h>
+#include <math.h>
 #include <vector>
 
 #include <gccore.h>
@@ -600,6 +601,87 @@ void GFX_EndGpuTimestamp(const char* name)
 
 }
 
+// QUANTIZED MESHES (GxUtils.cpp, GFX_SetQuantizedMeshes): the mesh's float vertices into the GPU's
+// 16-bit / 8-bit forms. False, and nothing changed, where they would not keep their precision, its
+// second UV set is in use, or there is no room (then it draws from its floats as ever).
+static bool QuantizeStaticMesh(StaticMesh* staticMesh, StaticMeshResource* resource)
+{
+    const Vertex* v = staticMesh->GetVertices();
+    const uint32_t n = staticMesh->GetNumVertices();
+    if (v == nullptr || n == 0)
+    {
+        return false;
+    }
+
+    float posMax = 0.0f, uvMax = 0.0f;
+    for (uint32_t i = 0; i < n; ++i)
+    {
+        const Vertex& x = v[i];
+        for (uint32_t k = 0; k < 3; ++k)
+        {
+            posMax = fmaxf(posMax, fabsf(x.mPosition[k]));
+        }
+        uvMax = fmaxf(uvMax, fmaxf(fabsf(x.mTexcoord0.x), fabsf(x.mTexcoord0.y)));
+        const bool uv1Zero = (x.mTexcoord1.x == 0.0f && x.mTexcoord1.y == 0.0f);
+        const bool uv1Same = (x.mTexcoord1.x == x.mTexcoord0.x && x.mTexcoord1.y == x.mTexcoord0.y);
+        if (!uv1Zero && !uv1Same)
+        {
+            return false;                       // a second UV set of its own: kept as floats
+        }
+    }
+
+    // the most fraction bits that still fit the extent in 16 bits (a margin under 32767); fewer than
+    // 8 (more than ~125 units, or UVs past ~125) is too coarse: kept as floats
+    const float kFit = 32000.0f;
+    int posFrac = 15;
+    while (posFrac > 0 && posMax * float(1 << posFrac) > kFit) --posFrac;
+    int uvFrac = 15;
+    while (uvFrac > 0 && uvMax * float(1 << uvFrac) > kFit) --uvFrac;
+    if (posFrac < 8 || uvFrac < 8)
+    {
+        return false;
+    }
+
+    uint8_t* q = (uint8_t*)memalign(32, n * kQuantStride);
+    if (q == nullptr)
+    {
+        return false;
+    }
+
+    const float posScale = float(1 << posFrac), uvScale = float(1 << uvFrac);
+    auto s16 = [](float f) -> int16_t
+    {
+        f = roundf(f);
+        return int16_t(f > 32767.0f ? 32767.0f : (f < -32768.0f ? -32768.0f : f));
+    };
+    auto s8 = [](float f) -> int8_t
+    {
+        f = roundf(f);
+        return int8_t(f > 127.0f ? 127.0f : (f < -128.0f ? -128.0f : f));
+    };
+    for (uint32_t i = 0; i < n; ++i)
+    {
+        const Vertex& x = v[i];
+        uint8_t* o = q + i * kQuantStride;
+        int16_t pos[3] = { s16(x.mPosition.x * posScale), s16(x.mPosition.y * posScale), s16(x.mPosition.z * posScale) };
+        int8_t nrm[3] = { s8(x.mNormal.x * 64.0f), s8(x.mNormal.y * 64.0f), s8(x.mNormal.z * 64.0f) };
+        int16_t uv[2] = { s16(x.mTexcoord0.x * uvScale), s16(x.mTexcoord0.y * uvScale) };
+        memcpy(o, pos, 6);              // (the GameCube is big-endian, as GX reads them)
+        memcpy(o + 6, nrm, 3);
+        o[9] = 0;
+        memcpy(o + 10, uv, 4);
+    }
+    DCFlushRange(q, n * kQuantStride);
+    GX_InvVtxCache();                   // (a block another mesh was drawn from: see the compact path)
+
+    resource->mQuantVertices = q;
+    resource->mPosFrac = uint8_t(posFrac);
+    resource->mUvFrac = uint8_t(uvFrac);
+    resource->mQuantized = true;
+    LogDebug("Mesh %s: quantized (%u vertices, %d/%d fraction bits)", staticMesh->GetName().c_str(), n, posFrac, uvFrac);
+    return true;
+}
+
 // Texture
 void GFX_CreateTextureResource(Texture* texture, std::vector<uint8_t>& data)
 {
@@ -929,6 +1011,11 @@ void GFX_CreateStaticMeshResource(StaticMesh* staticMesh, bool hasColor, uint32_
     else
     {
         resource->mDisplayList = CreateMeshDisplayList(staticMesh, false, resource->mDisplayListSize);
+        // the display list indexes the vertices the same way either form: quantized after it
+        if (GFX_GetQuantizedMeshes() && resource->mDisplayList != nullptr && !staticMesh->IsTriangleCollisionMeshEnabled())
+        {
+            QuantizeStaticMesh(staticMesh, resource);
+        }
     }
 }
 
@@ -961,6 +1048,12 @@ void GFX_DestroyStaticMeshResource(StaticMesh* staticMesh)
         resource->mCompactSpare = nullptr;
     }
     resource->mCompact = false;
+    if (resource->mQuantVertices != nullptr)
+    {
+        GxDeferFree(resource->mQuantVertices);      // the GPU may still be reading it
+        resource->mQuantVertices = nullptr;
+    }
+    resource->mQuantized = false;
 }
 
 // SkeletalMesh

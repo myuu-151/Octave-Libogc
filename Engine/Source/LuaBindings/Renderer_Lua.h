@@ -17,6 +17,7 @@ struct Renderer_Lua
     static int GetFrameIndex(lua_State* L);
     static int GetScreenIndex(lua_State* L);
     static int SetCompactUnlitMeshes(lua_State* L);
+    static int SetQuantizedMeshes(lua_State* L);
     static int GetScreenResolution(lua_State* L);
     static int GetActiveScreenResolution(lua_State* L);
     static int GetGlobalUiScale(lua_State* L);

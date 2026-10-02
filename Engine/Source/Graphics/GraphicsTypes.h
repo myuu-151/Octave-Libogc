@@ -169,6 +169,13 @@ struct StaticMeshResource
     // this and swaps: the GPU may still be drawing the last frame from the other.
     void* mCompactSpare = nullptr;
     bool mCompact = false;
+    // QUANTIZED (GFX_SetQuantizedMeshes): a lit, textured mesh as the GameCube's own compressed
+    // vertex formats -- 16-bit positions (mPosFrac fractional bits), 8-bit normals, 16-bit texture
+    // coordinates (mUvFrac) -- 14 bytes a vertex for the 40 of floats, which are let go.
+    void* mQuantVertices = nullptr;
+    uint8_t mPosFrac = 0;
+    uint8_t mUvFrac = 0;
+    bool mQuantized = false;
 #elif API_C3D
     void* mVertexData = nullptr;
     void* mIndexData = nullptr;

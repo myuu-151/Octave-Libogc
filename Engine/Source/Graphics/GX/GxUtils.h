@@ -58,6 +58,10 @@ void ApplyWidgetRotation(Mtx& mtx, Widget* widget);
 void* CreateMeshDisplayList(StaticMesh* staticMesh, bool useColor, uint32_t& outSize, bool compact = false);
 void GFX_SetCompactUnlitMeshes(bool compact);
 bool GFX_GetCompactUnlitMeshes();
+void GFX_SetQuantizedMeshes(bool quantized);
+bool GFX_GetQuantizedMeshes();
+// A quantized vertex: int16 x, y, z; int8 normal x, y, z; a pad byte; int16 s, t (GxUtils.cpp)
+static const uint32_t kQuantStride = 14;
 bool GFX_MaterialAllowsCompact(class Material* material);
 void CallMeshDisplayList(void* displayList, uint32_t size);
 void DestroyMeshDisplayList(void* displayList);

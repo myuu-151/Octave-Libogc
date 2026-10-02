@@ -122,6 +122,19 @@ int Renderer_Lua::SetCompactUnlitMeshes(lua_State* L)
     return 0;
 }
 
+// Renderer.SetQuantizedMeshes(on): GameCube/Wii only (a no-op elsewhere). Lit, textured meshes
+// loaded from then on are kept in the GPU's compressed vertex formats (GxUtils.cpp).
+int Renderer_Lua::SetQuantizedMeshes(lua_State* L)
+{
+    bool quantized = CHECK_BOOLEAN(L, 1);
+#if API_GX
+    GFX_SetQuantizedMeshes(quantized);
+#else
+    (void)quantized;
+#endif
+    return 0;
+}
+
 int Renderer_Lua::GetScreenResolution(lua_State* L)
 {
     int32_t screenIndex = -1;
@@ -399,6 +412,7 @@ void Renderer_Lua::Bind()
     REGISTER_TABLE_FUNC(L, tableIdx, GetScreenIndex);
 
     REGISTER_TABLE_FUNC(L, tableIdx, SetCompactUnlitMeshes);
+    REGISTER_TABLE_FUNC(L, tableIdx, SetQuantizedMeshes);
 
     REGISTER_TABLE_FUNC(L, tableIdx, GetScreenResolution);
 

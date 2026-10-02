@@ -643,6 +643,27 @@ bool GFX_GetCompactUnlitMeshes()
     return sCompactUnlitMeshes;
 }
 
+// QUANTIZED MESHES (opt in: GFX_SetQuantizedMeshes, from Lua Renderer.SetQuantizedMeshes). A lit,
+// textured mesh with no vertex colours and no triangle collision is kept in the GameCube's own
+// compressed vertex formats, as its games kept their models: positions as 16-bit fixed point (the
+// fraction bits chosen per mesh from its extent: a model a few units across gets 1/4096 of a unit or
+// finer), normals as 8-bit (6 fraction bits, the hardware's), texture coordinates as 16-bit. The GPU
+// expands them as it reads them, so lighting, environment mapping and the materials' UV transforms
+// see the same values. 14 bytes a vertex for 40, and the float array is let go: a 912-vertex
+// character frame went from 36 KB of vertices to 13. Meshes whose second UV set differs from the
+// first keep the floats (the second set is not kept), as do meshes too big to fit 16 bits finely.
+static bool sQuantizedMeshes = false;
+
+void GFX_SetQuantizedMeshes(bool quantized)
+{
+    sQuantizedMeshes = quantized;
+}
+
+bool GFX_GetQuantizedMeshes()
+{
+    return sQuantizedMeshes;
+}
+
 // Unlit, untextured, and its vertex colours not blending textures: drawn by colour alone.
 bool GFX_MaterialAllowsCompact(Material* material)
 {
@@ -683,6 +704,42 @@ void BindStaticMesh(StaticMesh* staticMesh, uint32_t* instanceColors)
         uint8_t* compact = (uint8_t*)resource->mCompactVertices;
         GX_SetArray(GX_VA_POS, compact, 16);
         GX_SetArray(GX_VA_CLR0, compact + 12, 16);
+        return;
+    }
+
+    if (resource->mQuantized)
+    {
+        // 16-bit position, 8-bit normal, a pad byte, 16-bit texture coordinate (14 bytes); both
+        // texture coordinate inputs read the one set. Flushed and the vertex cache cleared when it
+        // was made (GFX_CreateStaticMeshResource): nothing writes it after.
+        uint8_t* q = (uint8_t*)resource->mQuantVertices;
+        GX_ClearVtxDesc();
+        GX_SetVtxDesc(GX_VA_POS, GX_INDEX16);
+        GX_SetVtxDesc(GX_VA_NRM, GX_INDEX16);
+        if (instanceColors != nullptr)
+        {
+            GX_SetVtxDesc(GX_VA_CLR0, GX_INDEX16);
+        }
+        GX_SetVtxDesc(GX_VA_TEX0, GX_INDEX16);
+        GX_SetVtxDesc(GX_VA_TEX1, GX_INDEX16);
+        GX_SetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_S16, resource->mPosFrac);
+        GX_SetVtxAttrFmt(GX_VTXFMT0, GX_VA_NRM, GX_NRM_XYZ, GX_S8, 6);
+        if (instanceColors != nullptr)
+        {
+            GX_SetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
+        }
+        GX_SetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_S16, resource->mUvFrac);
+        GX_SetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX1, GX_TEX_ST, GX_S16, resource->mUvFrac);
+        GX_SetArray(GX_VA_POS, q, kQuantStride);
+        GX_SetArray(GX_VA_NRM, q + 6, kQuantStride);
+        if (instanceColors != nullptr)
+        {
+            GX_SetArray(GX_VA_CLR0, instanceColors, sizeof(uint32_t));
+            DCFlushRange(instanceColors, staticMesh->GetNumVertices() * sizeof(uint32_t));
+            GX_InvVtxCache();
+        }
+        GX_SetArray(GX_VA_TEX0, q + 10, kQuantStride);
+        GX_SetArray(GX_VA_TEX1, q + 10, kQuantStride);
         return;
     }
 

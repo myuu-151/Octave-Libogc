@@ -530,6 +530,16 @@ void StaticMesh::Create()
     {
         ReleaseSourceArrays();
     }
+    else if (GetResource()->mQuantized)
+    {
+        // the floats are in the quantized array now; the indices stay (a colour display list may
+        // still be made from them at draw time, GFX_DrawStaticMeshComp). Freed AT ONCE, not deferred
+        // as ResizeVertexArray does: the GPU never drew from them (the mesh is only now made), and
+        // deferred, a run of meshes loaded in one go (Super Sonic's 43 frames) held every one's
+        // floats until the frame ended -- 1.5 MB -- and the last of them found no room.
+        free(mVertices);
+        mVertices = nullptr;
+    }
 #endif
 }
 

@@ -35,8 +35,20 @@ Instructions for building from source below.
    - Open your Start Menu and launch `devkitPro > MSys2`
    - `pacman -S gamecube-dev wii-dev`
    - Restart computer if you've opened Visual Studio prior to installing to make sure the environment variables are found.
-3. Build shaders by running compile.bat in `/Engine/Shaders/GLSL`.
-4. Open Octave.sln.
+3. **The easy way:** double-click **`Build Octave.bat`**. The builder window checks the tools
+   above and builds what the release ships, each part a tick box:
+   - ffmpeg and ffprobe, unzipped into `External/ffmpeg/bin` (packaging needs them);
+   - the shaders (`Engine/Shaders/GLSL/bin`);
+   - the editor, `Octave.exe` at the root, which also packages games;
+   - the GameCube engine library (`Engine/Build/GCN/libEngine.a`);
+   - the Windows game program, which packaging a Windows game copies in.
+
+   Visual Studio builds two projects at a time and make two files at a time, at low priority,
+   so the machine stays usable. Each step shows how far it is, and nothing opens a window of its
+   own. The full log is in `builder.log`. To work in Visual Studio instead, go on from step 4.
+
+   ![The builder](Documentation/Info/builder.png)
+4. Build shaders by running compile.bat in `/Engine/Shaders/GLSL`, then open Octave.sln.
 5. Switch to the DebugEditor solution configuration.
 6. Set the Standalone project as the Startup Project.
 7. In the debug settings for Standalone, change the working directory to $(SolutionDir).
@@ -106,9 +118,10 @@ Video import and playback need **ffmpeg**: the editor cooks a video into a `Vide
 (baseline JPEG frames plus 16-bit PCM audio) with `ffmpeg`, reading its properties with
 `ffprobe`.
 
-The release zip ships them in `External/ffmpeg/bin/`. Building from a source checkout, put
-`ffmpeg.exe` and `ffprobe.exe` there yourself, from an LGPL build such as
-[BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds/releases) (`win64-lgpl`).
+The release zip ships them in `External/ffmpeg/bin/`. In a source checkout they're in git
+zipped, `External/ffmpeg/ffmpeg.zip` and `ffprobe.zip` (each exe is over GitHub's 100 MB a file):
+the builder (`Build Octave.bat`) unzips them into `bin/`, or unzip them there yourself. They're an
+LGPL build from [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds/releases) (`win64-lgpl`).
 Alternatively set `OCTAVE_FFMPEG` / `OCTAVE_FFPROBE` to their paths, or have them on your `PATH`.
 
 ## CMake Support

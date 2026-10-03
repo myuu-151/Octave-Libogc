@@ -32,16 +32,20 @@
 #include <string.h>
 #include <sys/reent.h>
 
-// WEAK: they exist only in a game linked with --wrap=malloc,... (the cache in use). A game linked
-// without (CCGC) may still pull this file in through BigBlockCacheReserve (System.ReserveBigBlocks
-// in Lua); there they are null, and the reserve does nothing.
+// The heap itself: newlib's reentrant allocators, which malloc() and the rest are thin calls to. Not
+// __real_malloc and the like: those exist only through the link's --wrap, and declared weak (so a game
+// linked without the wrap, like CCGC, still links when it pulls this file in through
+// BigBlockCacheReserve) they pulled nothing in -- in a game WITH the wrap no one else names malloc,
+// so newlib's malloc was never linked, __real_malloc was null, and the first allocation jumped to 0
+// (Octave v2.2-v2.3: every Lua-only game, packaged with Standalone). These are always there.
 extern "C"
 {
-void* __real_malloc(size_t size) __attribute__((weak));
-void __real_free(void* ptr) __attribute__((weak));
-void* __real_realloc(void* ptr, size_t size) __attribute__((weak));
-void* __real_calloc(size_t count, size_t size) __attribute__((weak));
-void* __real_memalign(size_t align, size_t size) __attribute__((weak));
+void* _malloc_r(struct _reent* r, size_t size);
+void _free_r(struct _reent* r, void* ptr);
+void* _realloc_r(struct _reent* r, void* ptr, size_t size);
+void* _calloc_r(struct _reent* r, size_t count, size_t size);
+void* _memalign_r(struct _reent* r, size_t align, size_t size);
+void* __wrap_malloc(size_t size);
 
 void __malloc_lock(struct _reent* r);
 void __malloc_unlock(struct _reent* r);
@@ -183,7 +187,7 @@ namespace
             sKept[which] = sKept[--sNumKept];
         }
 
-        __real_free(ptr);
+        _free_r(_REENT, ptr);
         return true;
     }
 }
@@ -217,9 +221,17 @@ void BigBlockCachePin(size_t size, uint32_t count)
 // boot, in one piece): the first of them is then as sure to be there as the rest. Pinned only, a
 // size still had to find its first block in the heap, and a stage's first rise piece, three stages
 // into a session, found none. 32-byte aligned, so memalign(32, ...) can have them too.
+// Whether the game was linked with --wrap=malloc,...: then every "malloc" in it, this file's too, is
+// __wrap_malloc. (Read through a volatile, so the compiler can't assume two functions differ.)
+static bool LinkedWithWrap()
+{
+    void* volatile mallocItself = (void*)&malloc;
+    return mallocItself == (void*)&__wrap_malloc;
+}
+
 void BigBlockCacheReserve(size_t size, uint32_t count)
 {
-    if (__real_memalign == nullptr)
+    if (!LinkedWithWrap())
     {
         return;                         // not linked with --wrap: no cache to reserve for
     }
@@ -233,7 +245,7 @@ void BigBlockCacheReserve(size_t size, uint32_t count)
                 return;
             }
         }
-        void* ptr = __real_memalign(32, size);
+        void* ptr = _memalign_r(_REENT, 32, size);
         if (ptr == nullptr)
         {
             return;
@@ -269,10 +281,10 @@ void* __wrap_malloc(size_t size)
         return ptr;
     }
 
-    ptr = __real_malloc(size);
+    ptr = _malloc_r(_REENT, size);
     while (ptr == nullptr && GiveBackOne(size))
     {
-        ptr = __real_malloc(size);
+        ptr = _malloc_r(_REENT, size);
     }
 
     return ptr;
@@ -289,10 +301,10 @@ void* __wrap_memalign(size_t align, size_t size)
         }
     }
 
-    void* ptr = __real_memalign(align, size);
+    void* ptr = _memalign_r(_REENT, align, size);
     while (ptr == nullptr && GiveBackOne(size))
     {
-        ptr = __real_memalign(align, size);
+        ptr = _memalign_r(_REENT, align, size);
     }
 
     return ptr;
@@ -318,12 +330,12 @@ void __wrap_free(void* ptr)
         }
     }
 
-    __real_free(ptr);
+    _free_r(_REENT, ptr);
 }
 
 void* __wrap_realloc(void* ptr, size_t size)
 {
-    void* out = __real_realloc(ptr, size);
+    void* out = _realloc_r(_REENT, ptr, size);
     if (out == nullptr && ptr != nullptr && size >= BIG_BLOCK)
     {
         // grown into a kept block of its new size, if there is one (a Lua array doubling)
@@ -338,7 +350,7 @@ void* __wrap_realloc(void* ptr, size_t size)
     }
     while (out == nullptr && size > 0 && GiveBackOne(size))
     {
-        out = __real_realloc(ptr, size);
+        out = _realloc_r(_REENT, ptr, size);
     }
 
     return out;
@@ -346,10 +358,10 @@ void* __wrap_realloc(void* ptr, size_t size)
 
 void* __wrap_calloc(size_t count, size_t size)
 {
-    void* ptr = __real_calloc(count, size);
+    void* ptr = _calloc_r(_REENT, count, size);
     while (ptr == nullptr && count > 0 && size > 0 && GiveBackOne(count * size))
     {
-        ptr = __real_calloc(count, size);
+        ptr = _calloc_r(_REENT, count, size);
     }
 
     return ptr;

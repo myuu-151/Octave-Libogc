@@ -135,8 +135,10 @@ void EditorMain(int32_t argc, char** argv)
         ActionManager::Get()->OpenProject(engineConfig->mProjectPath.c_str());
     }
 
-    // Spawn starting scene if a default wasn't loaded
-    if (GetEditorState()->GetEditScene() == nullptr)
+    // Spawn starting scene if a default wasn't loaded, with no project open. A project with no scene (a game
+    // made in code) keeps what its Scripts/Startup.lua built while it loaded, as opening it from File does: an
+    // empty scene opened here would clear that, and the spinning demo isn't the project's.
+    if (GetEditorState()->GetEditScene() == nullptr && GetEngineState()->mProjectPath == "")
     {
         GetEditorState()->OpenEditScene(nullptr);
         GetWorld(0)->SpawnNode<TestSpinner>();

@@ -17,8 +17,15 @@
 #include "../Generated/EmbeddedAssets.h"
 #endif
 
+#if PLATFORM_DOLPHIN && OCT_GECKO_LOG
+bool OctGeckoLogEnable();               // the engine (System_Dolphin.cpp): the log over the USB Gecko
+#endif
+
 InitOptions OctPreInitialize()
 {
+#if PLATFORM_DOLPHIN && OCT_GECKO_LOG
+    OctGeckoLogEnable();                 // built with GECKOLOG=1: the log, live over the USB Gecko
+#endif
     InitOptions initOptions;
     initOptions.mWidth = 1280;
     initOptions.mHeight = 720;

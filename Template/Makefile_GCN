@@ -31,6 +31,11 @@ OUTPUT_DIR	:=	$(CURDIR)/Build/GCN
 
 CFLAGS	= -g -O2 -Wall $(MACHDEP) $(INCLUDE) -DPLATFORM_GAMECUBE=1 -DPLATFORM_DOLPHIN=1 -DAPI_GX=1
 CXXFLAGS	=	$(CFLAGS)
+# GECKOLOG=1: the log, live over a USB Gecko (to DolphinWorks' Debug console, or any program on its
+# COM port). Source/Main.cpp turns it on; the engine sends it, never making the game wait.
+ifneq ($(GECKOLOG),)
+CFLAGS	+=	-DOCT_GECKO_LOG=1
+endif
 
 LDFLAGS	=	-g $(MACHDEP) -Wl,-Map,$(notdir $@).map
 

@@ -21,8 +21,15 @@
 extern uint32_t gNumEmbeddedAssets;
 #endif
 
+#if PLATFORM_DOLPHIN && OCT_GECKO_LOG
+bool OctGeckoLogEnable();               // the engine (System_Dolphin.cpp): the log over the USB Gecko
+#endif
+
 void OctPreInitialize(EngineConfig& config)
 {
+#if PLATFORM_DOLPHIN && OCT_GECKO_LOG
+    OctGeckoLogEnable();                 // built with GECKOLOG=1: the log, live over the USB Gecko
+#endif
     GetEngineState()->mStandalone = true;
 
 #if !EDITOR

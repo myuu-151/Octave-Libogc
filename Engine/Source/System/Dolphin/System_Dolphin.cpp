@@ -18,6 +18,7 @@
 // which links nothing from libogc and keeps the DOL apploader-bootable.
 #include <ogc/semaphore.h>
 #include <ogc/machine/processor.h>
+#include <ogc/usbgecko.h>        // the USB Gecko log (OctGeckoLogEnable): EXI only, nothing of the DVD driver
 #include <string.h>
 #include <unistd.h>
 #include <dirent.h>
@@ -1106,6 +1107,133 @@ namespace
 }
 #endif
 
+// ---- The USB Gecko log --------------------------------------------------------------------------
+// Log lines sent live over a USB Gecko (in a memory card slot), to DolphinWorks' Debug console or any
+// program reading its COM port. Off until a game built with GECKOLOG=1 calls OctGeckoLogEnable(); then
+// OctLog's lines go to it as well, and a game's own log can call OctGeckoLog().
+//
+// It never makes the game wait. A line is queued (a copy, interrupts off for an instant) and a thread
+// below every other sends it. The Gecko takes what its chip has room for; with nothing reading the port on
+// the PC that fills up, and the rest is dropped -- libogc's usb_sendbuffer_safe would wait for room forever
+// instead, and freeze the game (it froze DolphinWorks' Gecko test). A full queue drops lines too, and the
+// next line that gets through says how many.
+void OctGeckoLog(const char* line);
+
+namespace
+{
+    const uint32_t kGeckoLines = 64;
+    char sGeckoQueue[kGeckoLines][512];
+    volatile uint32_t sGeckoHead = 0;       // next to send
+    volatile uint32_t sGeckoTail = 0;       // next free
+    volatile uint32_t sGeckoDropped = 0;
+    volatile bool sGeckoOn = false;
+    s32 sGeckoChannel = -1;
+    sem_t sGeckoSem = LWP_SEM_NULL;
+    lwp_t sGeckoThread = LWP_THREAD_NULL;
+
+    // as much of it as the Gecko takes (a few tries, for a PC that's reading but a moment behind)
+    bool GeckoSend(const char* data, int len)
+    {
+        int done = 0;
+        for (int tries = 0; done < len && tries < 50; tries++)
+        {
+            done += usb_sendbuffer(sGeckoChannel, data + done, len - done);
+        }
+        return done == len;
+    }
+
+    void* GeckoThread(void*)
+    {
+        while (true)
+        {
+            LWP_SemWait(sGeckoSem);
+            while (sGeckoHead != sGeckoTail)
+            {
+                const uint32_t dropped = sGeckoDropped;
+                if (dropped != 0)
+                {
+                    char note[64];
+                    snprintf(note, sizeof(note), "(%u log lines dropped: the queue was full)\r\n", (unsigned)dropped);
+                    GeckoSend(note, strlen(note));
+                    sGeckoDropped -= dropped;
+                }
+                const char* line = sGeckoQueue[sGeckoHead % kGeckoLines];
+                if (GeckoSend(line, strlen(line)))
+                {
+                    GeckoSend("\r\n", 2);
+                }
+                sGeckoHead = sGeckoHead + 1;
+            }
+        }
+        return nullptr;
+    }
+}
+
+// Finds the USB Gecko (slot A, else slot B) and starts sending the log to it. False if there's none.
+bool OctGeckoLogEnable()
+{
+    if (sGeckoOn)
+    {
+        return true;
+    }
+    if (sGeckoChannel < 0)
+    {
+        if (usb_isgeckoalive(EXI_CHANNEL_0))
+            sGeckoChannel = EXI_CHANNEL_0;
+        else if (usb_isgeckoalive(EXI_CHANNEL_1))
+            sGeckoChannel = EXI_CHANNEL_1;
+        else
+            return false;
+    }
+    if (sGeckoSem == LWP_SEM_NULL)
+    {
+        if (LWP_SemInit(&sGeckoSem, 0, kGeckoLines + 1) != 0)
+        {
+            sGeckoSem = LWP_SEM_NULL;
+            return false;
+        }
+        // 16 KB of stack: it only formats a short note and talks to the EXI bus (no file system)
+        if (LWP_CreateThread(&sGeckoThread, GeckoThread, nullptr, nullptr, 16 * 1024, 10) != 0)
+        {
+            LWP_SemDestroy(sGeckoSem);
+            sGeckoSem = LWP_SEM_NULL;
+            return false;
+        }
+    }
+    usb_flush(sGeckoChannel);
+    sGeckoOn = true;
+    OctGeckoLog(sGeckoChannel == EXI_CHANNEL_0 ? "Octave: the log, live over the USB Gecko in slot A"
+                                               : "Octave: the log, live over the USB Gecko in slot B");
+    return true;
+}
+
+// Queues a line for the Gecko (no-op until OctGeckoLogEnable). Never waits.
+void OctGeckoLog(const char* line)
+{
+    if (!sGeckoOn)
+    {
+        return;
+    }
+    u32 level;
+    _CPU_ISR_Disable(level);
+    const bool full = (sGeckoTail - sGeckoHead) >= kGeckoLines;
+    if (!full)
+    {
+        strncpy(sGeckoQueue[sGeckoTail % kGeckoLines], line, sizeof(sGeckoQueue[0]) - 1);
+        sGeckoQueue[sGeckoTail % kGeckoLines][sizeof(sGeckoQueue[0]) - 1] = 0;
+        sGeckoTail = sGeckoTail + 1;
+    }
+    else
+    {
+        sGeckoDropped = sGeckoDropped + 1;
+    }
+    _CPU_ISR_Restore(level);
+    if (!full)
+    {
+        LWP_SemPost(sGeckoSem);
+    }
+}
+
 void OctLog(const char* format, ...)
 {
     char buffer[512];
@@ -1113,6 +1241,8 @@ void OctLog(const char* format, ...)
     va_start(args, format);
     vsnprintf(buffer, sizeof(buffer), format, args);
     va_end(args);
+
+    OctGeckoLog(buffer);                    // (a no-op unless the game turned the Gecko log on)
 
 #if __has_include("IsoLog_local.h")
     if (StartLogThread())

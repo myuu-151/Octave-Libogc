@@ -16,6 +16,14 @@ Visual Studio builds two projects at a time (MSBuild /m:2, CL_MPCount=2) and mak
 time, everything below normal priority, so the machine stays usable. Every step runs without a
 window of its own; the window shows each step's progress, and of the output only the steps and
 errors ("Show every line" for the rest). All of it is in builder.log at the root.
+
+Without the window (DolphinWorks' Engine page runs these; so can a script):
+
+    python Tools/builder.py --status                     what's built, stale and missing: one JSON line
+    python Tools/builder.py --build gcn,editor [--toolchain C:/devkitPro]
+                                                         those parts, as the window builds them: each event
+                                                         a JSON line ({"kind": "line" | "phase" | "step" |
+                                                         "progress" | "count" | "done", "data": [...]})
 """
 import io
 import json
@@ -710,7 +718,127 @@ class Builder:
                     self.write('\n-- the last lines of output:\n' + ''.join(text + '\n' for text in hidden))
 
 
+# --- without the window ------------------------------------------------------------------------
+
+# What the editor and the Windows game program don't compile: the other platforms' code. A change there
+# leaves them as they are.
+NOT_IN_EDITOR = {'Dolphin', 'GX', 'C3D', '3DS', 'Android', 'Linux'}
+
+
+def newest_source(folders, skip=()):
+    newest = 0.0
+    for folder in folders:
+        for dirpath, dirnames, filenames in os.walk(folder):
+            dirnames[:] = [d for d in dirnames if d not in skip]
+            for name in filenames:
+                if name.endswith(('.cpp', '.c', '.h', '.inl')):
+                    newest = max(newest, os.path.getmtime(os.path.join(dirpath, name)))
+    return newest
+
+
+def version():
+    """The release this is (a release's zip, unpacked by DolphinWorks' setup, says so), else git's tag."""
+    try:
+        return (ROOT / '.dolphinworks-release').read_text().strip()
+    except OSError:
+        pass
+    try:
+        out = subprocess.run(['git', 'describe', '--tags', '--match', 'v*'], cwd=ROOT, capture_output=True, text=True,
+                             timeout=10).stdout.strip()
+        m = re.match(r'(v[0-9.]+)(?:-([0-9]+)-g[0-9a-f]+)?$', out)
+        return m and m.group(1) + (f'+{m.group(2)}' if m.group(2) else '')
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def status():
+    """What's built, what's stale (its source changed since) and what building needs, for --status."""
+    editor, runtime = ROOT / 'Octave.exe', RUNTIME_BUILT
+    stale, everything = gcn_to_compile()
+    built_here = any((ROOT / 'Engine' / 'Intermediate' / 'GCN').glob('*.o'))     # (a release's lib: no objects)
+    windows_source = newest_source([ROOT / 'Engine' / 'Source', ROOT / 'Standalone' / 'Source'], NOT_IN_EDITOR)
+    mtime = lambda f: f.stat().st_mtime if f.exists() else None
+    toolchains = find_toolchains()
+    chosen = toolchain_settings().get('chosen')
+    devkitpro = next((t for t in toolchains if chosen and t.resolve() == Path(chosen).resolve()),
+                     toolchains[0] if toolchains else None)
+    git = (ROOT / '.git').exists()
+    return {
+        'root': str(ROOT), 'version': version(), 'git': git,
+        'parts': {
+            'ffmpeg': {'built': ffmpeg_there()},
+            'shaders': {'built': (SHADERS / 'bin').is_dir() and any((SHADERS / 'bin').iterdir())},
+            'editor': {'built': editor.exists(), 'time': mtime(editor),
+                       'stale': git and editor.exists() and windows_source > editor.stat().st_mtime},
+            'gcn': {'built': GCN_LIB.exists(), 'time': mtime(GCN_LIB),
+                    'stale': built_here and stale > 0, 'to_compile': stale if built_here else None, 'files': everything},
+            'runtime': {'built': runtime.exists(), 'time': mtime(runtime),
+                        'stale': git and runtime.exists() and windows_source > runtime.stat().st_mtime},
+        },
+        'needs': {'msbuild': str(find_msbuild() or '') or None, 'vulkan': str(find_vulkan() or '') or None,
+                  'toolchain': str(devkitpro) if devkitpro else None,
+                  'toolchain_label': toolchain_label(devkitpro) if devkitpro else None},
+    }
+
+
+class Headless(Builder):
+    """The builder's steps, without the window: events to stdout as JSON lines."""
+
+    def __init__(self, toolchain=None):
+        self.lines = queue.Queue()
+        self.busy = False
+        self.msbuild, self.vulkan = find_msbuild(), find_vulkan()
+        toolchains = find_toolchains()
+        chosen = toolchain or toolchain_settings().get('chosen')
+        self.devkitpro = (Path(toolchain) if toolchain else
+                          next((t for t in toolchains if chosen and t.resolve() == Path(chosen).resolve()),
+                               toolchains[0] if toolchains else None))
+
+    def missing(self, want):
+        """What the parts wanted need and this PC hasn't, as sentences (the window's X rows)."""
+        out = []
+        if (want['editor'] or want['runtime']) and not self.msbuild:
+            out.append('Visual Studio with "Desktop development with C++" (for the editor and the Windows game program)')
+        if (want['shaders'] or want['editor'] or want['runtime']) and not self.vulkan:
+            out.append('the Vulkan SDK (vulkan.lunarg.com)')
+        if want['gcn'] and not self.devkitpro:
+            out.append('a GameCube toolchain: devkitPro with devkitPPC, or gekko-toolchain')
+        return out
+
+
+def headless(argv):
+    def emit(kind, *data):
+        print(json.dumps({'kind': kind, 'data': list(data)}), flush=True)
+    if '--status' in argv:
+        print(json.dumps(status()), flush=True)
+        return 0
+    i = argv.index('--build')
+    parts = set(argv[i + 1].split(',')) if i + 1 < len(argv) else set()
+    toolchain = argv[argv.index('--toolchain') + 1] if '--toolchain' in argv else None
+    want = {key: key in parts for key, _ in Builder.PARTS}
+    if not any(want.values()):
+        emit('line', 'nothing to build: --build takes ' + ','.join(k for k, _ in Builder.PARTS), True)
+        emit('done', False)
+        return 2
+    builder = Headless(toolchain)
+    missing = builder.missing(want)
+    if missing:
+        for m in missing:
+            emit('line', 'needs ' + m, True)
+        emit('done', False)
+        return 1
+    LOG_FILE.write_text('', encoding='utf-8')
+    threading.Thread(target=builder.run_build, args=(want,), daemon=True).start()
+    while True:
+        kind, *data = builder.lines.get()
+        emit(kind, *data)
+        if kind == 'done':
+            return 0 if data[0] else 1
+
+
 def main():
+    if '--status' in sys.argv or '--build' in sys.argv:
+        sys.exit(headless(sys.argv))
     root = tk.Tk()
     try:
         ttk.Style().theme_use('vista')

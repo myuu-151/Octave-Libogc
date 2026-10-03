@@ -350,9 +350,11 @@ What Dolphin can't match, however it is set:
 - The GPU's **vertex cache**, and the texture cache going stale. A missing
   `GX_InvVtxCache` or `GX_InvalidateTexAll` draws correctly in Dolphin.
 - The **SD card path**. The console reads the disc image from the SD card, and
-  Dolphin reads it as a disc. The nearest Dolphin gets: an SD card adapter in
-  slot B holding the image, with the engine built with `OCT_FORCE_SD 1`
-  (`System_Dolphin.cpp`).
+  Dolphin reads it as a disc. Dolphin has no GameCube SD card adapter to put in
+  a slot (checked in 2609-1: memory card, GCI folder, USB Gecko, the broadband
+  and modem adapters, Advance Game Port, microphone; its SD card is the Wii's),
+  so this path is console-only. `OCT_FORCE_SD 1` (`System_Dolphin.cpp`) only
+  matters on hardware. Dolphin does emulate a USB Gecko, which helps the logs.
 - The **write-gather pipe's** partial bursts, and the GPU's exact timing.
 - For anything still in doubt, `CPUCore = 0` (the interpreter) is the reference
   CPU: slowest of all, but no JIT shortcuts.

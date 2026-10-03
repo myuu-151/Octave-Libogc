@@ -552,9 +552,14 @@ bool Initialize()
         ScriptUtils::RunScript("StartLuaPanda.lua");
 #endif
 
-        // Run Startup.lua if it exists.
+        // Run Startup.lua if it exists. Not when packaging headless: Startup.lua starts the GAME (a game made in
+        // code builds its world there, plays its music...), and the packager has no audio or screen to run it on
+        // -- a game's Audio.PlaySound2D there crashed it. Packaging only needs the project's files.
         ScriptUtils::RunScript("EngineStartup.lua");
-        ScriptUtils::RunScript("Startup.lua");
+        if (!IsHeadless())
+        {
+            ScriptUtils::RunScript("Startup.lua");
+        }
     }
 #endif
 
@@ -958,10 +963,10 @@ void LoadProject(const std::string& path, bool discoverAssets)
     extern void UpdateLuaPath();
     UpdateLuaPath();
 
-    if (GetEngineState()->mInitialized)
+    if (GetEngineState()->mInitialized && !IsHeadless())
     {
         // If the engine is already initialized, then run the new startup script.
-        // Otherwise, it will get run on Initialize().
+        // Otherwise, it will get run on Initialize(). (Not when packaging headless: see Initialize().)
         ScriptUtils::RunScript("Startup.lua");
     }
 #endif

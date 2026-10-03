@@ -21,6 +21,8 @@ Sonic Pipe Dream's way (its native/*.py wrote its stages, sounds and sky this wa
 Each file's settings live in Raw/assets.json, keyed by its path in Raw/ (DolphinWorks edits them):
     textures  name, filter (linear | nearest), wrap (repeat | clamp | mirror), mipmaps, force_hq, downsample
     sounds    name, mode (effect | music), rate, volume, pitch, max_instances, quality (music: Vorbis -q)
+    videos    name, preset (custom | ntsc | pal), width, height (0: keep the aspect), fps, quality (JPEG, 2 best - 31
+              smallest), audio_channels (1 | 2), native_resolution, native_fps, native_audio (Octave cooks them)
     models    name, scale, lit, cull (back | none), filter (its textures)
 A model becomes a mesh for each of its materials (SM_<Name>, or SM_<Name>_<Material>; split at the consoles'
 65535 vertices), a material each (M_...), and a texture for each picture in it (T_...): its scene baked flat.
@@ -483,7 +485,13 @@ def read_model(path, work=None):
     raise ValueError(f'Not a model: {path}')
 
 
-def octave_import(project_folder, source, name, folder):
+VIDEO_OPTIONS = {'preset': 'videoPreset', 'width': 'videoWidth', 'height': 'videoHeight', 'fps': 'videoFps',
+                 'quality': 'videoQuality', 'audio_channels': 'videoAudioChannels', 'native_resolution': 'videoNativeResolution',
+                 'native_fps': 'videoNativeFrameRate', 'native_audio': 'videoNativeSampleRate'}
+PRESETS = {'custom': 0, 'ntsc': 1, 'pal': 2}
+
+
+def octave_import(project_folder, source, name, folder, options=None):
     """A file imported by Octave's own importer (the editor's Import Asset), headless: Octave.exe -headless -project
     <project> -import <file> <folder>. What only Octave makes: a cooked video (JPEG frames and audio, its own
     format), a font. The asset is named after the file, so the source goes in under the asset's name."""
@@ -497,7 +505,10 @@ def octave_import(project_folder, source, name, folder):
     copy = work / (name + Path(source).suffix.lower())
     copy.write_bytes(Path(source).read_bytes())
     (Path(project_folder) / 'Assets' / folder).mkdir(parents=True, exist_ok=True)
-    run = subprocess.run([str(OCTAVE_EXE), '-headless', '-project', octp.as_posix(), '-import', str(copy), folder],
+    sets = []
+    for key, value in (options or {}).items():
+        sets += ['-importset', f'{key}={int(value)}']
+    run = subprocess.run([str(OCTAVE_EXE), '-headless', '-project', octp.as_posix(), *sets, '-import', str(copy), folder],
                          cwd=str(ROOT), capture_output=True, creationflags=NO_WINDOW, timeout=3600)
     out = run.stdout.decode('utf-8', 'replace') + run.stderr.decode('utf-8', 'replace')
     if 'Headless import:' not in out:
@@ -591,7 +602,10 @@ def default_name(rel, kind):
 
 
 def defaults(rel, kind, source):
-    if kind in ('video', 'font'):
+    if kind == 'video':                         # VideoClip's own defaults (its cook: Engine/Source/Engine/Assets/VideoClip.h)
+        return {'name': default_name(rel, kind), 'preset': 'custom', 'width': 320, 'height': 0, 'fps': 24, 'quality': 5,
+                'audio_channels': 2, 'native_resolution': False, 'native_fps': False, 'native_audio': False}
+    if kind == 'font':
         return {'name': default_name(rel, kind)}
     if kind == 'mesh':
         return {'name': default_name(rel, kind), 'scale': 1.0, 'lit': True, 'cull': 'back', 'filter': 'linear'}
@@ -678,7 +692,10 @@ class Project:
             try:
                 if entry['kind'] in ('video', 'font'):
                     folder = Path(rel).parent.as_posix()
-                    target, what = octave_import(self.folder, source, entry['name'], '' if folder == '.' else folder)
+                    options = None
+                    if entry['kind'] == 'video':
+                        options = {VIDEO_OPTIONS[k]: (PRESETS.get(entry[k], 0) if k == 'preset' else entry[k]) for k in VIDEO_OPTIONS}
+                    target, what = octave_import(self.folder, source, entry['name'], '' if folder == '.' else folder, options)
                     old = self.made.get(rel + '#path')
                     if old and Path(old) != target and Path(old).exists():
                         Path(old).unlink()

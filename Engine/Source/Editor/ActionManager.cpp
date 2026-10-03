@@ -2673,6 +2673,16 @@ Asset* ActionManager::ImportAsset(const std::string& path)
         TypeId typeId = importTypes[i];
         ImportOptions options;
 
+        // -importset key=value on the command line (a headless import): those options too
+        for (const std::string& setting : GetEngineConfig()->mImportSettings)
+        {
+            size_t eq = setting.find('=');
+            if (eq != std::string::npos)
+            {
+                options.SetOptionValue(setting.substr(0, eq), int32_t(atoi(setting.c_str() + eq + 1)));
+            }
+        }
+
         if (typeId == StaticMesh::GetStaticType() ||
             typeId == SkeletalMesh::GetStaticType())
         {

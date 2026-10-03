@@ -331,6 +331,10 @@ struct EngineConfig
     // -import <file> [<folder in Assets>] (repeatable), headless: each file imported as the editor's Import Asset
     // would (videos cooked, fonts, meshes...), into that folder. Pairs: file, folder ("" for Assets/ itself).
     std::vector<std::string> mImportPaths;
+    // -importset <key>=<integer> (repeatable): import options for those imports, as the editor's import settings
+    // would be (a video's cook: videoPreset, videoWidth, videoHeight, videoFps, videoQuality, videoAudioChannels,
+    // videoNativeResolution, videoNativeFrameRate, videoNativeSampleRate).
+    std::vector<std::string> mImportSettings;
 };
 
 enum class ConsoleMode

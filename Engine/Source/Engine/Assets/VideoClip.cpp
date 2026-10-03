@@ -247,6 +247,35 @@ bool VideoClip::Import(const std::string& path, ImportOptions* options)
 
 #if EDITOR
     mSourcePath = path;
+
+    // The cook's settings, if the import was given them (a headless import's -importset): else the defaults.
+    if (options != nullptr)
+    {
+        auto setting = [options](const char* key, int32_t& value)
+        {
+            if (options->HasOption(key))
+            {
+                value = options->GetOptionValue(key).GetInteger();
+            }
+        };
+        auto flag = [options](const char* key, bool& value)
+        {
+            if (options->HasOption(key))
+            {
+                value = options->GetOptionValue(key).GetInteger() != 0;
+            }
+        };
+        setting("videoPreset", mCookPreset);
+        setting("videoWidth", mCookWidth);
+        setting("videoHeight", mCookHeight);
+        setting("videoFps", mCookFps);
+        setting("videoQuality", mCookQuality);
+        setting("videoAudioChannels", mCookAudioChannels);
+        flag("videoNativeResolution", mNativeResolution);
+        flag("videoNativeFrameRate", mNativeFrameRate);
+        flag("videoNativeSampleRate", mNativeSampleRate);
+    }
+
     success = Cook();
 
     if (success)

@@ -277,6 +277,12 @@ void ReadCommandLineArgs(int32_t argc, char** argv)
             int32_t linear = atoi(argv[i + 1]);
             sEngineConfig.mLinearColorSpace = linear;
         }
+        else if (strcmp(argv[i], "-importset") == 0)
+        {
+            OCT_ASSERT(i + 1 < argc);
+            sEngineConfig.mImportSettings.push_back(argv[i + 1]);
+            ++i;
+        }
         else if (strcmp(argv[i], "-import") == 0)
         {
             // -import <file> [<folder in Assets>]: the folder is the next argument unless that's an option

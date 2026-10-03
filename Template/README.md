@@ -16,6 +16,12 @@ It comes two ways:
 
 Either one shows "Hello, GameCube!" in the middle of the screen and counts presses of A.
 
+**Assets without the editor:** put pictures, sounds and models (PNG, WAV, OGG, MP3, GLB, glTF, OBJ, and .blend
+through Blender) in a `Raw/` folder; `Tools/octkit.py convert <project>` (DolphinWorks does it on every Build) makes
+them Octave assets in `Assets/`, settings per file in `Raw/assets.json`, and the game loads them by name
+(`LoadAsset("T_Logo")`). **A build step of its own:** `build.py` (copy this one in) runs after that, before packaging,
+with `octkit` to import: for what the game makes for itself, as Sonic Pipe Dream's scripts did.
+
 Build it for GameCube with `Octave.exe -headless -project <path>/<Name>.octp -build GameCube` (DolphinWorks'
 Build runs that), which writes `Packaged/GameCube/<Name>.iso`. A C++ project finds the engine through the
 `OCTAVE` environment variable (DolphinWorks sets it), else `Makefile_GCN`'s default. `GECKOLOG=1` or `GDB=1` in

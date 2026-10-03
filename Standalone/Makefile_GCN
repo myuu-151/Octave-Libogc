@@ -44,6 +44,14 @@ LDFLAGS	=	-g $(MACHDEP) -Wl,-Map,$(notdir $@).map -Wl,--wrap=malloc,--wrap=free,
 #---------------------------------------------------------------------------------
 LIBS	:=	-lEngine -lBullet -lasnd -lbba -lfat -logc -lm
 
+# GDB=1 (Debug (GDB) in DolphinWorks): libogc's debug stub linked in, on the USB Gecko. The game waits at
+# its start for GDB (DolphinWorks' Start GDB), then runs under it: breakpoints, and a crash stops in GDB at
+# its line. GDB has the Gecko to itself: no Gecko log in this build.
+ifneq ($(GDB),)
+CFLAGS	+=	-DOCT_GDB=1
+LIBS	:=	-ldb $(LIBS)
+endif
+
 #---------------------------------------------------------------------------------
 # list of directories containing libraries, this must be the top level containing
 # include and lib

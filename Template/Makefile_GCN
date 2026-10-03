@@ -1,137 +1,88 @@
 #---------------------------------------------------------------------------------
-# Clear the implicit built in rules
+# OctTemplate for GameCube: an Octave project with its own C++ (Source/), linked with the prebuilt
+# engine (Engine/Build/GCN/libEngine.a: DolphinWorks' Engine page, or Octave's builder, makes it).
+#
+# Normally built by Octave's packager (DolphinWorks' Build runs it):
+#   Octave.exe -headless -project <path>/OctTemplate.octp -build GameCube
+# which runs this makefile, then writes Packaged/GameCube/ (.dol + .iso).
+#
+# By hand: make -f Makefile_GCN  -> Build/GCN/OctTemplate.dol
+#
+# Build switches (DolphinWorks sets them from its build options):
+#   GECKOLOG=1  the engine's log, live over a USB Gecko (DolphinWorks' Debug console)
+#   GDB=1       libogc's debug stub on the USB Gecko: the game waits at its start for GDB
 #---------------------------------------------------------------------------------
 .SUFFIXES:
 .SECONDARY:
-#---------------------------------------------------------------------------------
+
 ifeq ($(strip $(DEVKITPPC)),)
 $(error "Please set DEVKITPPC in your environment. export DEVKITPPC=<path to>devkitPPC")
 endif
 
 include $(DEVKITPPC)/gamecube_rules
 
-#---------------------------------------------------------------------------------
-# TARGET is the name of the output
-# BUILD is the directory where object files & intermediate files will be placed
-# SOURCES is a list of directories containing source code
-# INCLUDES is a list of directories containing extra header files
-#---------------------------------------------------------------------------------
-TARGET		:=	$(notdir $(CURDIR))
+# Where Octave-libogc is: the OCTAVE environment variable (DolphinWorks' Build sets it), else this.
+export OCTAVE ?= $(abspath $(CURDIR)/../octave-libogc)
+
+TARGET		:=	OctTemplate
 BUILD		:=	Intermediate/GCN
-SOURCES		:=	Source \
-				Generated
-#DATA		:=	data
-#TEXTURES	:=	textures 
-INCLUDES	:=	../Engine/Include ../Engine/Include/Engine ../External ../External/Bullet
+SOURCES		:=	Source Generated
 OUTPUT_DIR	:=	$(CURDIR)/Build/GCN
 
-#---------------------------------------------------------------------------------
-# options for code generation
-#---------------------------------------------------------------------------------
-
 CFLAGS	= -g -O2 -Wall $(MACHDEP) $(INCLUDE) -DPLATFORM_GAMECUBE=1 -DPLATFORM_DOLPHIN=1 -DAPI_GX=1
-CXXFLAGS	=	$(CFLAGS)
-# GECKOLOG=1: the log, live over a USB Gecko (to DolphinWorks' Debug console, or any program on its
-# COM port). Source/Main.cpp turns it on; the engine sends it, never making the game wait.
+CXXFLAGS	=	$(CFLAGS) -std=gnu++20
+
 ifneq ($(GECKOLOG),)
 CFLAGS	+=	-DOCT_GECKO_LOG=1
 endif
 
-LDFLAGS	=	-g $(MACHDEP) -Wl,-Map,$(notdir $@).map
+# --wrap: the engine's own allocator (it tracks and logs what's allocated), as Octave's Standalone links
+LDFLAGS	=	-g $(MACHDEP) -Wl,-Map,$(notdir $@).map -Wl,--wrap=malloc,--wrap=free,--wrap=realloc,--wrap=calloc,--wrap=memalign
 
-#---------------------------------------------------------------------------------
-# any extra libraries we wish to link with the project
-#---------------------------------------------------------------------------------
 LIBS	:=	-lEngine -lBullet -lasnd -lbba -lfat -logc -lm
 
-# GDB=1 (Debug (GDB) in DolphinWorks): libogc's debug stub linked in, on the USB Gecko. The game waits at
-# its start for GDB (DolphinWorks' Start GDB), then runs under it: breakpoints, and a crash stops in GDB at
-# its line. GDB has the Gecko to itself: no Gecko log in this build.
 ifneq ($(GDB),)
 CFLAGS	+=	-DOCT_GDB=1
 LIBS	:=	-ldb $(LIBS)
 endif
 
-#---------------------------------------------------------------------------------
-# list of directories containing libraries, this must be the top level containing
-# include and lib
-#---------------------------------------------------------------------------------
-ENGINE_LIB_DIR := $(CURDIR)/../Engine/Build/GCN
-BULLET_LIB_DIR := $(CURDIR)/../External/Bullet/Build/GCN
-LIBDIRS	:= $(ENGINE_LIB_DIR) $(BULLET_LIB_DIR)
+ENGINE_LIB_DIR := $(OCTAVE)/Engine/Build/GCN
+BULLET_LIB_DIR := $(OCTAVE)/External/Bullet/Build/GCN
 
-#---------------------------------------------------------------------------------
-# no real need to edit anything past this point unless you need to add additional
-# rules for different file extensions
-#---------------------------------------------------------------------------------
 ifneq ($(notdir $(BUILD)),$(notdir $(CURDIR)))
 #---------------------------------------------------------------------------------
 
-export OUTPUT	:=	$(CURDIR)/$(TARGET)
-
-export VPATH	:=	$(foreach dir,$(SOURCES),$(CURDIR)/$(dir)) \
-					$(foreach dir,$(DATA),$(CURDIR)/$(dir)) \
-					$(foreach dir,$(TEXTURES),$(CURDIR)/$(dir))
-
+export VPATH	:=	$(foreach dir,$(SOURCES),$(abspath $(dir)))
 export DEPSDIR	:=	$(CURDIR)/$(BUILD)
 
-#---------------------------------------------------------------------------------
-# automatically build a list of object files for our project
-#---------------------------------------------------------------------------------
 CFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
 CPPFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
-sFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))
-SFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.S)))
-BINFILES	:=	$(foreach dir,$(DATA),$(notdir $(wildcard $(dir)/*.*)))
-SCFFILES	:=	$(foreach dir,$(TEXTURES),$(notdir $(wildcard $(dir)/*.scf)))
-TPLFILES	:=	$(SCFFILES:.scf=.tpl)
 
-#---------------------------------------------------------------------------------
-# use CXX for linking C++ projects, CC for standard C
-#---------------------------------------------------------------------------------
-ifeq ($(strip $(CPPFILES)),)
-	export LD	:=	$(CC)
-else
-	export LD	:=	$(CXX)
-endif
+export LD	:=	$(CXX)
+export OFILES	:=	$(CPPFILES:.cpp=.o) $(CFILES:.c=.o)
 
-export OFILES_BIN	:=	$(addsuffix .o,$(BINFILES)) $(addsuffix .o,$(TPLFILES))
-export OFILES_SOURCES := $(CPPFILES:.cpp=.o) $(CFILES:.c=.o) $(sFILES:.s=.o) $(SFILES:.S=.o)
-export OFILES := $(OFILES_BIN) $(OFILES_SOURCES)
-
-export HFILES := $(addsuffix .h,$(subst .,_,$(BINFILES))) $(addsuffix .h,$(subst .,_,$(TPLFILES)))
-
-#---------------------------------------------------------------------------------
-# build a list of include paths
-#---------------------------------------------------------------------------------
-export INCLUDE	:=	$(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) \
-					$(foreach dir,$(LIBDIRS),-I$(dir)/include) \
+export INCLUDE	:=	-I$(CURDIR)/Source \
+					-I$(OCTAVE)/Engine/Source \
+					-I$(OCTAVE)/Engine/Source/Engine \
+					-I$(OCTAVE)/External \
+					-I$(OCTAVE)/External/Bullet \
 					-I$(CURDIR)/$(BUILD) \
 					-I$(LIBOGC_INC)
 
-#---------------------------------------------------------------------------------
-# build a list of library paths
-#---------------------------------------------------------------------------------
-export LIBPATHS	:=	$(foreach dir,$(LIBDIRS),-L$(dir)) \
-					-L$(LIBOGC_LIB)
+export LIBPATHS	:=	-L$(ENGINE_LIB_DIR) -L$(BULLET_LIB_DIR) -L$(LIBOGC_LIB)
 
 export ENGINE_LIB := $(ENGINE_LIB_DIR)/libEngine.a
-export BULLET_LIB := $(BULLET_LIB_DIR)/libBullet.a
 export OUTPUT	:=	$(OUTPUT_DIR)/$(TARGET)
-.PHONY: $(BUILD) MakeEngine OutputDir clean
 
-#---------------------------------------------------------------------------------
-$(BUILD): MakeEngine OutputDir
+.PHONY: $(BUILD) OutputDir clean
+
+$(BUILD): OutputDir
 	@[ -d $@ ] || mkdir -p $@
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile_GCN
 
 OutputDir:
-	[ -d $(OUTPUT_DIR) ] || mkdir -p $(OUTPUT_DIR)
+	@[ -d $(OUTPUT_DIR) ] || mkdir -p $(OUTPUT_DIR)
 
-MakeEngine:
-	@$(MAKE) --no-print-directory -C $(CURDIR)/../Engine -f $(CURDIR)/../Engine/Makefile_GCN
-
-#---------------------------------------------------------------------------------
 clean:
 	@echo clean ...
 	@rm -fr $(BUILD) $(OUTPUT).dol $(OUTPUT).elf
@@ -139,28 +90,8 @@ clean:
 #---------------------------------------------------------------------------------
 else
 
-#---------------------------------------------------------------------------------
-# main targets
-#---------------------------------------------------------------------------------
 $(OUTPUT).dol: $(OUTPUT).elf
 $(OUTPUT).elf: $(OFILES) $(ENGINE_LIB)
-
-$(ENGINE_LIB):
-
-$(OFILES_SOURCES) : $(HFILES)
-
-#---------------------------------------------------------------------------------
-%.txt.o	%_txt.h :	%.txt
-#---------------------------------------------------------------------------------
-	@echo $(notdir $<)
-	@$(bin2o)
-
-#---------------------------------------------------------------------------------
-%.tpl.o	%_tpl.h :	%.tpl
-#---------------------------------------------------------------------------------
-	@echo $(notdir $<)
-	@$(bin2o)
-
 
 -include $(DEPSDIR)/*.d
 

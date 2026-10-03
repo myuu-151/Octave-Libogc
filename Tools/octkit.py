@@ -1,7 +1,8 @@
 """octkit: Octave assets written from code -- no editor.
 
 A project's Raw/ folder holds the source files (PNG, JPG, BMP, TGA, WAV, OGG, MP3, FLAC, and models: GLB, glTF, OBJ,
-and Blender's .blend through Blender itself); octkit turns each into
+and Blender's .blend through Blender itself; videos and fonts go through Octave's own importer, run headless); octkit
+turns each into
 the .oct asset the editor would have made of it, in Assets/ (the same sub-folders), and Octave's packager then
 cooks them for the console as it does any asset (a texture's GameCube format is chosen there, from its alpha).
 Sonic Pipe Dream's way (its native/*.py wrote its stages, sounds and sky this way), made general.
@@ -57,6 +58,9 @@ PIXEL_RGBA8 = 2
 IMAGES = {'.png', '.jpg', '.jpeg', '.bmp', '.tga', '.webp'}
 AUDIO = {'.wav', '.ogg', '.mp3', '.flac', '.aif', '.aiff'}
 MODELS = {'.glb', '.gltf', '.obj', '.blend'}
+VIDEOS = {'.mp4', '.mov', '.webm', '.mkv', '.avi', '.m4v'}
+FONTS = {'.ttf'}
+OCTAVE_EXE = ROOT / "Octave.exe"
 SETTINGS = 'assets.json'
 
 
@@ -479,6 +483,31 @@ def read_model(path, work=None):
     raise ValueError(f'Not a model: {path}')
 
 
+def octave_import(project_folder, source, name, folder):
+    """A file imported by Octave's own importer (the editor's Import Asset), headless: Octave.exe -headless -project
+    <project> -import <file> <folder>. What only Octave makes: a cooked video (JPEG frames and audio, its own
+    format), a font. The asset is named after the file, so the source goes in under the asset's name."""
+    octp = next(Path(project_folder).glob('*.octp'), None)
+    if not octp:
+        raise RuntimeError('no .octp in the project folder')
+    if not OCTAVE_EXE.exists():
+        raise RuntimeError(f'No Octave.exe in {ROOT}: the Engine page builds it (the editor).')
+    work = Path(project_folder) / 'Intermediate' / 'octkit'
+    work.mkdir(parents=True, exist_ok=True)
+    copy = work / (name + Path(source).suffix.lower())
+    copy.write_bytes(Path(source).read_bytes())
+    (Path(project_folder) / 'Assets' / folder).mkdir(parents=True, exist_ok=True)
+    run = subprocess.run([str(OCTAVE_EXE), '-headless', '-project', octp.as_posix(), '-import', str(copy), folder],
+                         cwd=str(ROOT), capture_output=True, creationflags=NO_WINDOW, timeout=3600)
+    out = run.stdout.decode('utf-8', 'replace') + run.stderr.decode('utf-8', 'replace')
+    if 'Headless import:' not in out:
+        lines = [l for l in out.splitlines() if re.search(r'error|fail', l, re.I) and 'socket' not in l]
+        raise RuntimeError('Octave did not import it: ' + ('; '.join(lines[-3:]) or out[-300:].strip()))
+    what = next((l.split(': ', 1)[1] for l in out.splitlines() if 'cooked' in l), 'imported by Octave')
+    what = re.sub(r',?\s*[\d.]+ MB\.?\s*$', '', what)                   # (the size is said after)
+    return Path(project_folder) / 'Assets' / folder / (name + '.oct'), what
+
+
 def _split(vertices, indices):
     """(vertices, indices) pieces of at most MAX_VERTICES vertices each, by whole triangles."""
     if len(vertices) <= MAX_VERTICES:
@@ -547,12 +576,13 @@ def convert_model(source, folder, base, settings, uuids, work):
 
 # --- a project's Raw/ folder ----------------------------------------------------------------------
 
-PREFIX = {'texture': 'T_', 'sound': 'SW_', 'mesh': 'SM_'}
+PREFIX = {'texture': 'T_', 'sound': 'SW_', 'mesh': 'SM_', 'video': 'V_', 'font': 'F_'}
 
 
 def kind_of(path):
     ext = Path(path).suffix.lower()
-    return 'texture' if ext in IMAGES else 'sound' if ext in AUDIO else 'mesh' if ext in MODELS else None
+    return ('texture' if ext in IMAGES else 'sound' if ext in AUDIO else 'mesh' if ext in MODELS else
+            'video' if ext in VIDEOS else 'font' if ext in FONTS else None)
 
 
 def default_name(rel, kind):
@@ -561,6 +591,8 @@ def default_name(rel, kind):
 
 
 def defaults(rel, kind, source):
+    if kind in ('video', 'font'):
+        return {'name': default_name(rel, kind)}
     if kind == 'mesh':
         return {'name': default_name(rel, kind), 'scale': 1.0, 'lit': True, 'cull': 'back', 'filter': 'linear'}
     if kind == 'texture':
@@ -644,6 +676,17 @@ class Project:
                 continue
             uuid = int(entry['uuid'], 16)
             try:
+                if entry['kind'] in ('video', 'font'):
+                    folder = Path(rel).parent.as_posix()
+                    target, what = octave_import(self.folder, source, entry['name'], '' if folder == '.' else folder)
+                    old = self.made.get(rel + '#path')
+                    if old and Path(old) != target and Path(old).exists():
+                        Path(old).unlink()
+                    self.made[rel] = stamp
+                    self.made[rel + '#path'] = str(target)
+                    made += 1
+                    emit('line', text=f'{rel} -> {entry["name"]} ({what}, {target.stat().st_size / 1048576:.1f} MB)', level='info')
+                    continue
                 if entry['kind'] == 'mesh':
                     uuids = self.settings.setdefault(rel, {}).setdefault('uuids', {})
                     written = convert_model(source, target.parent, entry['name'], entry, uuids,

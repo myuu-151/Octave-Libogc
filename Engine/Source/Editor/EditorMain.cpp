@@ -24,6 +24,8 @@
 #include "Nodes/3D/TestSpinner.h"
 
 #include "ActionManager.h"
+#include "AssetManager.h"
+#include "AssetDir.h"
 #include "InputManager.h"
 #include "Preferences/PreferencesManager.h"
 #include "Grid.h"
@@ -93,6 +95,43 @@ void EditorMain(int32_t argc, char** argv)
             }
         }
 
+        // -import: files imported as the editor's Import Asset would, each into its folder in Assets/ (made in the
+        // asset tree as needed; the folder on disk must be there). How a project made without the editor gets
+        // what only Octave's importers make, a cooked video above all (octkit, DolphinWorks).
+        for (size_t i = 0; i + 1 < engineConfig->mImportPaths.size(); i += 2)
+        {
+            const std::string& file = engineConfig->mImportPaths[i];
+            const std::string& folder = engineConfig->mImportPaths[i + 1];
+            AssetDir* dir = AssetManager::Get()->FindProjectDirectory();
+            size_t start = 0;
+            while (dir != nullptr && start < folder.size())
+            {
+                size_t slash = folder.find_first_of("/\\", start);
+                std::string part = folder.substr(start, slash == std::string::npos ? std::string::npos : slash - start);
+                if (part != "")
+                {
+                    AssetDir* sub = dir->GetSubdirectory(part);
+                    dir = (sub != nullptr) ? sub : dir->CreateSubdirectory(part);
+                }
+                start = (slash == std::string::npos) ? folder.size() : slash + 1;
+            }
+            if (dir == nullptr)
+            {
+                LogError("Headless import: no project to import %s into", file.c_str());
+                continue;
+            }
+            GetEditorState()->SetAssetDirectory(dir, false);
+            Asset* asset = ActionManager::Get()->ImportAsset(file);
+            if (asset != nullptr)
+            {
+                LogDebug("Headless import: %s -> %s%s.oct", file.c_str(), dir->mPath.c_str(), asset->GetName().c_str());
+            }
+            else
+            {
+                LogError("Headless import failed: %s", file.c_str());
+            }
+        }
+
         if (engineConfig->mBuildPlatform != Platform::Count)
         {
             LogDebug("Headless mode: Building for %s (embedded=%d)",
@@ -103,7 +142,7 @@ void EditorMain(int32_t argc, char** argv)
 
             LogDebug("Headless mode: Build complete");
         }
-        else
+        else if (engineConfig->mImportPaths.empty())
         {
             LogError("Headless mode: No build platform specified. Use -build <platform>");
         }

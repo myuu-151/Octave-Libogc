@@ -328,6 +328,9 @@ struct EngineConfig
     bool mHeadless = false;
     Platform mBuildPlatform = Platform::Count;  // Count = no build requested
     bool mBuildEmbedded = false;
+    // -import <file> [<folder in Assets>] (repeatable), headless: each file imported as the editor's Import Asset
+    // would (videos cooked, fonts, meshes...), into that folder. Pairs: file, folder ("" for Assets/ itself).
+    std::vector<std::string> mImportPaths;
 };
 
 enum class ConsoleMode

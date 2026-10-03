@@ -277,6 +277,22 @@ void ReadCommandLineArgs(int32_t argc, char** argv)
             int32_t linear = atoi(argv[i + 1]);
             sEngineConfig.mLinearColorSpace = linear;
         }
+        else if (strcmp(argv[i], "-import") == 0)
+        {
+            // -import <file> [<folder in Assets>]: the folder is the next argument unless that's an option
+            OCT_ASSERT(i + 1 < argc);
+            sEngineConfig.mImportPaths.push_back(argv[i + 1]);
+            ++i;
+            if (i + 1 < argc && argv[i + 1][0] != '-')
+            {
+                sEngineConfig.mImportPaths.push_back(argv[i + 1]);
+                ++i;
+            }
+            else
+            {
+                sEngineConfig.mImportPaths.push_back("");
+            }
+        }
         else if (strcmp(argv[i], "-headless") == 0)
         {
             sEngineConfig.mHeadless = true;

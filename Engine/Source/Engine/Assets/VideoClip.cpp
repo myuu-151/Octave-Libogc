@@ -31,7 +31,7 @@ static_assert(int32_t(VideoCookPreset::Count) == 3, "Need to update cook preset 
 // Marks versioned metadata. Clips saved before versioning start their metadata with
 // the source path's length, which never equals this.
 static constexpr uint32_t kVideoClipMetaMagic = 0x564d4356; // "VCMV"
-static constexpr uint32_t kVideoClipMetaVersion = 1;
+static constexpr uint32_t kVideoClipMetaVersion = 2;     // 2: the cook's sample rate
 
 bool VideoClip::HandlePropChange(Datum* datum, uint32_t index, const void* newValue)
 {
@@ -125,6 +125,11 @@ void VideoClip::LoadStream(Stream& stream, Platform platform)
         mNativeSampleRate = stream.ReadBool();
     }
 
+    if (metaVersion >= 2)
+    {
+        mCookSampleRate = stream.ReadInt32();
+    }
+
     mWidth = stream.ReadUint32();
     mHeight = stream.ReadUint32();
     mFrameRateMilli = stream.ReadUint32();
@@ -195,6 +200,7 @@ void VideoClip::SaveStream(Stream& stream, Platform platform)
     meta.WriteBool(mNativeResolution);
     meta.WriteBool(mNativeFrameRate);
     meta.WriteBool(mNativeSampleRate);
+    meta.WriteInt32(mCookSampleRate);
 
     meta.WriteUint32(mWidth);
     meta.WriteUint32(mHeight);
@@ -274,6 +280,7 @@ bool VideoClip::Import(const std::string& path, ImportOptions* options)
         flag("videoNativeResolution", mNativeResolution);
         flag("videoNativeFrameRate", mNativeFrameRate);
         flag("videoNativeSampleRate", mNativeSampleRate);
+        setting("videoSampleRate", mCookSampleRate);
     }
 
     success = Cook();
@@ -301,6 +308,7 @@ void VideoClip::GatherProperties(std::vector<Property>& outProps)
     outProps.push_back(Property(DatumType::Integer, "Cook FPS", this, &mCookFps, 1, HandlePropChange));
     outProps.push_back(Property(DatumType::Integer, "JPEG Quality", this, &mCookQuality, 1, HandlePropChange));
     outProps.push_back(Property(DatumType::Integer, "Audio Channels", this, &mCookAudioChannels, 1, HandlePropChange));
+    outProps.push_back(Property(DatumType::Integer, "Sample Rate", this, &mCookSampleRate, 1, HandlePropChange));
 
     static bool sFakeRecook = false;
     outProps.push_back(Property(DatumType::Bool, "Recook", this, &sFakeRecook, 1, HandlePropChange));
@@ -649,8 +657,9 @@ bool VideoClip::Cook()
 
     const int32_t quality = glm::clamp(mCookQuality, 2, 31);
     const int32_t audioChannels = (mCookAudioChannels == 1) ? 1 : 2;
-    // 44100 Hz matches the rate the rest of the audio pipeline (Vorbis) supports.
-    int32_t audioRate = 44100;
+    // The audio's rate: its own (Native Sample Rate, below), else the one asked for. 44100 by default; lower costs
+    // the console less to mix and less disc (22050 is plenty for speech).
+    int32_t audioRate = glm::clamp(mCookSampleRate, 8000, 48000);
 
     std::string tempDir = GetEngineState()->mProjectDirectory + "Intermediate";
     SYS_CreateDirectory(tempDir.c_str());

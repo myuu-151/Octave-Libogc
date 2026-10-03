@@ -22,7 +22,8 @@ Each file's settings live in Raw/assets.json, keyed by its path in Raw/ (Dolphin
     textures  name, filter (linear | nearest), wrap (repeat | clamp | mirror), mipmaps, force_hq, downsample
     sounds    name, mode (effect | music), rate, volume, pitch, max_instances, quality (music: Vorbis -q)
     videos    name, preset (custom | ntsc | pal), width, height (0: keep the aspect), fps, quality (JPEG, 2 best - 31
-              smallest), audio_channels (1 | 2), native_resolution, native_fps, native_audio (Octave cooks them)
+              smallest), audio_channels (1 | 2), sample_rate (Hz), native_resolution, native_fps, native_audio
+              (Octave cooks them)
     models    name, scale, lit, cull (back | none), filter (its textures)
 A model becomes a mesh for each of its materials (SM_<Name>, or SM_<Name>_<Material>; split at the consoles'
 65535 vertices), a material each (M_...), and a texture for each picture in it (T_...): its scene baked flat.
@@ -486,7 +487,8 @@ def read_model(path, work=None):
 
 
 VIDEO_OPTIONS = {'preset': 'videoPreset', 'width': 'videoWidth', 'height': 'videoHeight', 'fps': 'videoFps',
-                 'quality': 'videoQuality', 'audio_channels': 'videoAudioChannels', 'native_resolution': 'videoNativeResolution',
+                 'quality': 'videoQuality', 'audio_channels': 'videoAudioChannels', 'sample_rate': 'videoSampleRate',
+                 'native_resolution': 'videoNativeResolution',
                  'native_fps': 'videoNativeFrameRate', 'native_audio': 'videoNativeSampleRate'}
 PRESETS = {'custom': 0, 'ntsc': 1, 'pal': 2}
 
@@ -604,7 +606,7 @@ def default_name(rel, kind):
 def defaults(rel, kind, source):
     if kind == 'video':                         # VideoClip's own defaults (its cook: Engine/Source/Engine/Assets/VideoClip.h)
         return {'name': default_name(rel, kind), 'preset': 'custom', 'width': 320, 'height': 0, 'fps': 24, 'quality': 5,
-                'audio_channels': 2, 'native_resolution': False, 'native_fps': False, 'native_audio': False}
+                'audio_channels': 2, 'sample_rate': 44100, 'native_resolution': False, 'native_fps': False, 'native_audio': False}
     if kind == 'font':
         return {'name': default_name(rel, kind)}
     if kind == 'mesh':
@@ -686,7 +688,9 @@ class Project:
             rel, entry = self.entry(source)
             target = self.output(rel, entry)
             stamp = self.stamp(source, entry)
-            if not everything and self.made.get(rel) == stamp and target.exists():
+            made_paths = self.made.get(rel + '#paths') if entry['kind'] == 'mesh' else None   # (a model: all its parts)
+            there = all(Path(x).exists() for x in made_paths) if made_paths else target.exists()
+            if not everything and self.made.get(rel) == stamp and there:
                 continue
             uuid = int(entry['uuid'], 16)
             try:

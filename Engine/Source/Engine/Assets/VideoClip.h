@@ -85,11 +85,12 @@ protected:
     int32_t mCookFps = 24;
     int32_t mCookQuality = 5;        // ffmpeg -q:v, 2 (best) to 31 (smallest)
     int32_t mCookAudioChannels = 2;
+    int32_t mCookSampleRate = 44100; // the audio's rate (8000 - 48000 Hz), unless Native Sample Rate
     // Keep the source's own values instead of the settings above (read with ffprobe).
     // Dimensions still round down to multiples of 16, and at most 1024.
     bool mNativeResolution = false;
     bool mNativeFrameRate = false;
-    bool mNativeSampleRate = false;  // Otherwise audio is cooked at 44100 Hz
+    bool mNativeSampleRate = false;  // Otherwise audio is cooked at mCookSampleRate
 
     // Cooked format
     uint32_t mWidth = 0;
